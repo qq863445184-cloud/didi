@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>抢单接口测试</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 24px; line-height: 1.5; }
+        .card { border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+        .row { margin-bottom: 12px; }
+        input, button, textarea { font-size: 14px; }
+        input, textarea { width: 100%; padding: 8px; box-sizing: border-box; }
+        button { padding: 8px 14px; cursor: pointer; margin-right: 8px; }
+        pre { background: #f6f8fa; padding: 12px; border-radius: 6px; overflow: auto; }
+        table { border-collapse: collapse; width: 100%; }
+        th, td { border: 1px solid #ddd; padding: 8px; font-size: 13px; }
+        th { background: #fafafa; }
+        .hint { color: #666; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <h1>抢单接口测试页</h1>
+
+    <div class="card">
+        <h2>0) 服务地址配置</h2>
+        <div class="row">
+            <label for="apiBase">API Base URL：</label>
+            <input id="apiBase" placeholder="例如：http://121.43.51.41:5000" />
+        </div>
+        <button onclick="saveApiBase()">保存地址</button>
+        <span id="apiBaseHint" class="hint"></span>
+    </div>
+
+    <div class="card">
+        <h2>1) 抢票接口</h2>
+        <div class="row">
+            <label for="ticketPayload">请求JSON：</label>
+            <textarea id="ticketPayload" rows="4">{"ticket_id":"T1001","quantity":1}</textarea>
+        </div>
+        <button onclick="callApi('/api/ticket/grab', 'ticketPayload')">发送抢票请求</button>
+    </div>
+
+    <div class="card">
+        <h2>2) 抢红包接口</h2>
+        <div class="row">
+            <label for="redPacketPayload">请求JSON：</label>
+            <textarea id="redPacketPayload" rows="4">{"campaign_id":"R2001","amount":8.88}</textarea>
+        </div>
+        <button onclick="callApi('/api/red-packet/grab', 'redPacketPayload')">发送抢红包请求</button>
+    </div>
+
+    <div class="card">
+        <h2>3) 抢打车订单接口</h2>
+        <div class="row">
+            <label for="ridePayload">请求JSON：</label>
+            <textarea id="ridePayload" rows="4">{"order_id":"D3001","city":"Hangzhou"}</textarea>
+        </div>
+        <button onclick="callApi('/api/ride-hailing/grab', 'ridePayload')">发送抢打车订单请求</button>
+    </div>
+
+    <div class="card">
+        <h2>4) 抢外卖订单接口</h2>
+        <div class="row">
+            <label for="takeoutPayload">请求JSON：</label>
+            <textarea id="takeoutPayload" rows="4">{"order_id":"W4001","platform":"meituan"}</textarea>
+        </div>
+        <button onclick="callApi('/api/takeout/grab', 'takeoutPayload')">发送抢外卖订单请求</button>
+    </div>
+
+    <div class="card">
+        <h2>接口响应</h2>
+        <pre id="responseBox">点击上方按钮后显示响应...</pre>
+        <p class="hint">会记录客户端 IP、时间（北京时间）、次数（同一 IP + 同一接口递增）到 SQLite。</p>
+    </div>
+
+    <div class="card">
+        <h2>最近日志</h2>
+        <button onclick="loadLogs()">刷新日志</button>
+        <button onclick="clearLogs()">清空所有日志</button>
+        <table>
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>类型</th>
+                    <th>客户端IP</th>
+                    <th>时间</th>
+                    <th>次数</th>
+                    <th>Payload</th>
+                </tr>
+            </thead>
+            <tbody id="logBody"></tbody>
+        </table>
+    </div>
+
+<script>
+    const responseBox = document.getElementById('responseBox');
+    const logBody = document.getElementById('logBody');
+    const apiBaseInput = document.getElementById('apiBase');
+    const apiBaseHint = document.getElementById('apiBaseHint');
+
+    function defaultApiBase() {
+        const remoteDefault = 'http://121.43.51.41:5000';
+        const host = (window.location.hostname || '').toLowerCase();
+        const isLocalHost = host === 'localhost' || host === '127.0.0.1';
+
+        if (window.location.protocol === 'file:' || isLocalHost) {
+            return remoteDefault;
+        }
+
+        return window.location.origin;
+    }
+
+    function normalizeBaseUrl(url) {
+        const raw = (url || '').trim();
+        try {
+            const parsed = new URL(raw);
+            return `${parsed.protocol}//${parsed.host}`;
+        } catch {
+            return raw.replace(/\/$/, '');
+        }
+    }
+
+    function getApiBase() {
+        const saved = localStorage.getItem('apiBase');
+        return normalizeBaseUrl(saved || defaultApiBase());
+    }
+
+    function saveApiBase() {
+        const base = normalizeBaseUrl(apiBaseInput.value);
+        if (!base.startsWith('http://') && !base.startsWith('https://')) {
+            alert('API Base URL 需要以 http:// 或 https:// 开头');
+            return;
+        }
+        localStorage.setItem('apiBase', base);
+        apiBaseHint.textContent = `当前地址：${base}`;
+    }
+
+    function buildApiUrl(path) {
+        const base = getApiBase();
+        return `${base}${path}`;
+    }
+
+    async function parseJsonResponse(res) {
+        const text = await res.text();
+        try {
+            return JSON.parse(text);
+        } catch (err) {
+            const preview = text.slice(0, 160).replace(/\s+/g, ' ');
+            throw new Error(`接口返回不是 JSON（HTTP ${res.status}，URL ${res.url}）：${preview}`);
+        }
+    }
+
+    async function callApi(url, payloadId) {
+        try {
+            const payloadText = document.getElementById(payloadId).value.trim();
+            const payload = payloadText ? JSON.parse(payloadText) : {};
+
+            const res = await fetch(buildApiUrl(url), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            const data = await parseJsonResponse(res);
+            if (!res.ok) {
+                throw new Error(`接口错误（HTTP ${res.status}）：${JSON.stringify(data)}`);
+            }
+            responseBox.textContent = JSON.stringify(data, null, 2);
+            await loadLogs();
+        } catch (err) {
+            responseBox.textContent = '请求失败：' + err.message;
+        }
+    }
+
+    async function loadLogs() {
+        const res = await fetch(buildApiUrl('/api/logs?limit=20'));
+        const data = await parseJsonResponse(res);
+        const logs = data.data || [];
+
+        logBody.innerHTML = logs.map(item => `
+            <tr>
+                <td>${item.id}</td>
+                <td>${item.action_type}</td>
+                <td>${item.client_ip}</td>
+                <td>${item.event_time}</td>
+                <td>${item.attempt_count}</td>
+                <td><pre>${JSON.stringify(item.payload)}</pre></td>
+            </tr>
+        `).join('');
+    }
+
+    async function clearLogs() {
+        if (!confirm('确定要清空所有历史日志吗？')) {
+            return;
+        }
+
+        try {
+            const res = await fetch(buildApiUrl('/api/logs/clear'), {
+                method: 'POST'
+            });
+            const data = await parseJsonResponse(res);
+            if (!res.ok) {
+                throw new Error(`接口错误（HTTP ${res.status}）：${JSON.stringify(data)}`);
+            }
+
+            responseBox.textContent = JSON.stringify(data, null, 2);
+            await loadLogs();
+        } catch (err) {
+            responseBox.textContent = '请求失败：' + err.message;
+        }
+    }
+
+    apiBaseInput.value = getApiBase();
+    apiBaseHint.textContent = `当前地址：${getApiBase()}`;
+    loadLogs();
+</script>
+</body>
+</html>
