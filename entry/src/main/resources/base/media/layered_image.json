@@ -1,7 +1,7 @@
 {
   "layered-image":
   {
-    "background" : "$media:background",
-    "foreground" : "$media:foreground"
+    "background" : "$media:didi_bg_v2",
+    "foreground" : "$media:didi_fg_v2"
   }
 }
