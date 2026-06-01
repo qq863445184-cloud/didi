@@ -103,6 +103,19 @@ Recommended incremental build order:
 5. Make the final writer summarize changed files, verification results, and
    residual risks.
 
+Coding-agent prompts are scaffolded in `app/coding_prompts.py`:
+
+- `system`: global coding agent behavior and safety policy.
+- `intake`: turn user input into an actionable software task.
+- `repo_inspector`: inspect README, config, dependencies, entrypoints, and layout.
+- `locator`: find relevant files, symbols, tests, and error locations.
+- `planner`: produce a minimal edit and verification plan.
+- `editor`: apply scoped code changes while preserving project style.
+- `tester`: run the smallest useful validation commands and capture failures.
+- `debugger`: analyze failures and propose the next minimal fix.
+- `reflector`: persist reusable engineering lessons only when valuable.
+- `writer`: report changes, verification results, and residual risks.
+
 ## Configuration
 
 Create `.env` from `.env.example` and set:
