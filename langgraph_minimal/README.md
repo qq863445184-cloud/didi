@@ -137,6 +137,11 @@ Aliases:
 initial -> reflect -> refine
 ```
 
+The coding prompts are intentionally code-task oriented: they require reading
+related files before judging, locating call chains and tests, planning minimal
+diffs, running targeted validation commands, analyzing failures before fixing,
+and reporting file-level changes plus verification results.
+
 ## Configuration
 
 Create `.env` from `.env.example` and set:
