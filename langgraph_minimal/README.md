@@ -1,6 +1,65 @@
 # Minimal LangGraph Agent
 
-This is a tiny LangGraph agent project with an LLM node, a tool node, and conditional routing.
+This is a local LangGraph agent project that demonstrates a controllable agent
+architecture with ReAct, tools, agentic RAG, layered memory, context assembly,
+and protocol adapters.
+
+## 当前能力
+
+这个项目目前已经实现：
+
+- OpenAI-compatible LLM access, default model name `gpt-5.5`.
+- General ReAct agent:
+  `planner -> agent -> tools -> agent -> verifier -> writer -> END`.
+- Explicit agentic RAG graph:
+  `retrieve -> verify -> retry if needed -> writer -> END`.
+- Auto router graph:
+  project/code/RAG questions go to RAG; general tasks go to the ReAct agent.
+- Tool calling:
+  time, calculator, project file listing, project file reading, project document search.
+- LangChain RAG:
+  document loading, recursive chunking, in-memory vector store, dense retrieval,
+  sparse BM25 retrieval, RRF fusion, neighbor chunk expansion, optional query
+  rewriting, optional verifier retry, optional reranking.
+- Layered memory:
+  working memory, conversation memory, profile memory, and project memory.
+- Context engineering:
+  system instruction, profile memory, project memory, conversation memory,
+  question, verifier notes, and evidence are assembled with budgets and dedup.
+- Chinese-first prompts:
+  general agent, RAG verifier, and RAG writer all use Chinese instructions.
+- Protocol adapters:
+  CLI, HTTP, A2A-like JSON-RPC, SSE, WebSocket, and MCP stdio server.
+
+## 实现与优化记录
+
+Key implementation decisions and optimizations:
+
+- `.env` loading uses `load_dotenv(override=True)` so local project settings win
+  over stale shell environment variables.
+- `.env`, `.venv`, and persisted memory JSON files are ignored by Git to avoid
+  committing secrets or local runtime state.
+- Default RAG mode favors fast local development:
+  `EMBEDDING_PROVIDER=local_hash`, query rewriting disabled, reranker disabled,
+  verifier disabled, and low top-k values.
+- Higher-quality RAG is still available through
+  `EMBEDDING_PROVIDER=sentence_transformers` with
+  `BAAI/bge-small-zh-v1.5`, or through OpenAI-compatible embeddings if the
+  endpoint supports embeddings.
+- The general agent was upgraded from a simple tool loop to an explicit ReAct
+  workflow with planning and verification.
+- The ReAct verifier reads the full execution trace, including tool calls and
+  tool observations, so it can correctly verify whether tool-backed answers are
+  grounded.
+- The writer stores `final_answer` instead of appending duplicate final messages,
+  keeping conversation history smaller.
+- `session_id` now flows through CLI, HTTP, SSE, WebSocket, MCP, router, general
+  agent, and RAG writer.
+- One-shot CLI/API/MCP calls persist conversation turns, not only `--chat` mode.
+- RAG evidence is trimmed by evidence block, preserving `Source` labels as much
+  as possible for citation quality.
+- File tools are sandboxed to `langgraph_minimal` and hide `.env`, `.venv`, and
+  `__pycache__`.
 
 ## Configuration
 
@@ -48,6 +107,16 @@ reranking are available but disabled in the fast default config. Enable
 `RAG_QUERY_REWRITE`, `RAG_VERIFY_ENABLED`, or `RAG_RERANKER_ENABLED` for higher
 quality at higher latency. Set `RAG_RERANKER_PROVIDER=cross_encoder` to try a
 local cross-encoder reranker.
+
+The general agent uses an explicit ReAct graph:
+
+```text
+planner -> agent -> tools -> agent -> verifier -> writer -> END
+```
+
+The `agent -> tools -> agent` loop may run repeatedly when the model decides it
+needs tool observations. The verifier can send the task back to the agent once
+when the candidate answer is not sufficiently grounded.
 
 For explicit agentic RAG, use `--rag`. This runs:
 
@@ -104,7 +173,10 @@ python -m app.cli "请计算 19*24"
 python -m app.cli "读取 README.md 并总结一下"
 python -m app.cli --rag "这个 agent 当前 RAG 用了哪些高级检索技术？"
 python -m app.cli --general "现在北京时间几点？"
+python -m app.cli --session dev "继续刚才的问题"
 ```
+
+One-shot mode also persists conversation memory under the selected `--session`.
 
 ## Chat Mode
 
@@ -150,9 +222,12 @@ POST /ask
 POST /rag
 GET  /.well-known/agent-card.json
 POST /a2a
-GET  /events/ask?question=...&mode=auto
+GET  /events/ask?question=...&mode=auto&session_id=default
 WS   /ws
 ```
+
+`POST /ask`, `POST /rag`, SSE, WebSocket, and A2A requests all accept
+`session_id` so callers can keep separate conversation memories.
 
 MCP stdio server:
 
