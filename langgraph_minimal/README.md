@@ -67,6 +67,42 @@ Key implementation decisions and optimizations:
 - File tools are sandboxed to `langgraph_minimal` and hide `.env`, `.venv`, and
   `__pycache__`.
 
+## Coding Agent Roadmap
+
+The next architectural direction is to evolve from a general agent into a
+coding-oriented agent. The goal is to move from `ask -> answer` toward a full
+software task loop:
+
+```text
+task -> inspect -> plan -> edit -> test -> fix -> verify -> report
+```
+
+Target graph:
+
+```mermaid
+flowchart TD
+  START --> Intake["intake: 理解任务"]
+  Intake --> Repo["repo_inspector: 读取项目结构"]
+  Repo --> Locator["locator: 定位相关文件"]
+  Locator --> Planner["planner: 制定修改计划"]
+  Planner --> Editor["editor: 修改代码"]
+  Editor --> Tester["tester: 编译/测试"]
+  Tester -->|"失败"| Debugger["debugger: 分析错误"]
+  Debugger --> Reflector["reflector: 沉淀修复经验"]
+  Reflector --> Editor
+  Tester -->|"通过"| Writer["writer: 总结变更"]
+  Writer --> END
+```
+
+Recommended incremental build order:
+
+1. Add a coding-task router.
+2. Add a dedicated coding graph instead of overloading the general agent.
+3. Add safe code-edit and command tools constrained to the project directory.
+4. Feed compile/test failures into debugger and reflection memory.
+5. Make the final writer summarize changed files, verification results, and
+   residual risks.
+
 ## Configuration
 
 Create `.env` from `.env.example` and set:
