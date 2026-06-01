@@ -112,6 +112,8 @@ Coding-agent prompts are scaffolded in `app/coding_prompts.py`:
 - `initial_execution`: first-pass execution prompt for the minimal viable solution.
 - `reflection`: critique prompt for finding gaps in the first execution.
 - `optimization`: prompt for converting critique into concrete next actions.
+- `initial` / `reflect` / `refine`: hello-agents-style aliases for the same
+  three-stage loop.
 - `intake`: turn user input into an actionable software task.
 - `repo_inspector`: inspect README, config, dependencies, entrypoints, and layout.
 - `locator`: find relevant files, symbols, tests, and error locations.
@@ -127,6 +129,12 @@ three-stage optimization loop:
 
 ```text
 initial_execution -> reflection -> optimization
+```
+
+Aliases:
+
+```text
+initial -> reflect -> refine
 ```
 
 ## Configuration

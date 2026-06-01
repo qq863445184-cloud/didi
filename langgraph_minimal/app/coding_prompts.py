@@ -142,8 +142,11 @@ CODING_WRITER_PROMPT = (
 
 CODING_PROMPTS = {
     "system": CODING_SYSTEM_PROMPT,
+    "initial": INITIAL_EXECUTION_PROMPT,
     "initial_execution": INITIAL_EXECUTION_PROMPT,
+    "reflect": REFLECTION_PROMPT,
     "reflection": REFLECTION_PROMPT,
+    "refine": OPTIMIZATION_PROMPT,
     "optimization": OPTIMIZATION_PROMPT,
     "intake": INTAKE_PROMPT,
     "repo_inspector": REPO_INSPECTOR_PROMPT,
