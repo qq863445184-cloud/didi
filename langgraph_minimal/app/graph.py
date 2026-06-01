@@ -86,7 +86,7 @@ def _parse_reflection_note(text: str) -> dict:
                 return json.loads(match.group(0))
             except json.JSONDecodeError:
                 pass
-    return {"lesson": ""}
+    return {"lesson": "", "category": "general", "apply_when": "", "confidence": "medium"}
 
 
 def build_graph():
@@ -184,10 +184,18 @@ def build_graph():
                 SystemMessage(
                     content=build_system_context(
                         (
-                            "你是 Reflection 节点。请从失败或不足的执行中提炼一条可复用经验。\n"
+                            "你是 Reflection 节点。请从失败或不足的执行中提炼结构化经验。\n"
                             "只返回 JSON："
-                            '{"lesson": "一条不超过80字的中文经验；没有价值则写空字符串"}\n'
-                            "不要记录密钥、隐私、临时问题文本或一次性结果。"
+                            "{"
+                            '"category": "tool_use/evidence/context/test/debugging/safety/general", '
+                            '"apply_when": "适用场景，不超过40字", '
+                            '"lesson": "可复用经验，不超过80字；没有价值则为空字符串", '
+                            '"confidence": "low/medium/high"'
+                            "}\n"
+                            "记录规则：\n"
+                            "1. 只记录未来任务也有价值的工程策略。\n"
+                            "2. 不记录密钥、隐私、用户原话、一次性文件名或临时结果。\n"
+                            "3. 如果只是这次任务的普通失败，不具备复用价值，lesson 置为空。"
                         ),
                         session_id=session_id,
                     )
@@ -207,7 +215,12 @@ def build_graph():
         if lesson:
             from app.memory import append_reflection
 
-            append_reflection(lesson)
+            append_reflection(
+                lesson=lesson,
+                category=str(reflection.get("category", "general")),
+                apply_when=str(reflection.get("apply_when", "")),
+                confidence=str(reflection.get("confidence", "medium")),
+            )
         return {"reflection_note": lesson}
 
     def writer(state: ReActState):

@@ -110,15 +110,27 @@ def append_session_turn(user: str, assistant: str, session_id: str = "default") 
     save_session(session, session_id)
 
 
-def append_reflection(lesson: str, source: str = "react") -> None:
+def append_reflection(
+    lesson: str,
+    source: str = "react",
+    category: str = "general",
+    apply_when: str = "",
+    confidence: str = "medium",
+) -> None:
     lesson = " ".join(lesson.strip().split())
     if not lesson or lesson.lower() in {"none", "无", "无需记录"}:
         return
 
     reflections = load_reflections()
     lessons = reflections.setdefault("lessons", [])
-    item = {"source": source, "lesson": lesson}
-    if item in lessons:
+    item = {
+        "source": _clean_memory_value(source, "react"),
+        "category": _clean_memory_value(category, "general"),
+        "apply_when": _clean_memory_value(apply_when, ""),
+        "lesson": lesson,
+        "confidence": _clean_memory_value(confidence, "medium"),
+    }
+    if any(existing.get("lesson") == lesson for existing in lessons):
         return
 
     lessons.append(item)
@@ -144,8 +156,9 @@ def get_memory_context(session_id: str = "default") -> str:
 
     reflections = load_reflections()
     lines.extend(
-        f"- Reflection lesson: {item.get('lesson')}"
+        _format_reflection_line(item)
         for item in reflections.get("lessons", [])[-6:]
+        if item.get("lesson")
     )
 
     summary = session.get("summary", "")
@@ -186,6 +199,24 @@ def _append_summary(summary: str, messages: list[dict[str, str]]) -> str:
             snippets.append(f"{message.get('role', 'unknown')}: {content[:160]}")
     combined = " | ".join([summary, *snippets]).strip(" |")
     return combined[-2000:]
+
+
+def _format_reflection_line(item: dict[str, Any]) -> str:
+    category = item.get("category", "general")
+    apply_when = item.get("apply_when", "")
+    confidence = item.get("confidence", "medium")
+    lesson = item.get("lesson", "")
+    if apply_when:
+        return (
+            f"- Reflection lesson [{category}, confidence={confidence}, "
+            f"when={apply_when}]: {lesson}"
+        )
+    return f"- Reflection lesson [{category}, confidence={confidence}]: {lesson}"
+
+
+def _clean_memory_value(value: str, fallback: str) -> str:
+    cleaned = " ".join(str(value).strip().split())
+    return cleaned or fallback
 
 
 def _read_json(path: Path, fallback: dict[str, Any]) -> dict[str, Any]:

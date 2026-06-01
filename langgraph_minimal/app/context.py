@@ -57,11 +57,21 @@ def _project_section(budget: int) -> str:
 def _reflection_section(budget: int) -> str:
     reflections = load_reflections()
     lines = [
-        f"经验：{item.get('lesson')}"
+        _format_reflection(item)
         for item in reflections.get("lessons", [])[-8:]
         if item.get("lesson")
     ]
     return _section("反思记忆", lines, budget)
+
+
+def _format_reflection(item: dict) -> str:
+    category = item.get("category", "general")
+    confidence = item.get("confidence", "medium")
+    apply_when = item.get("apply_when", "")
+    lesson = item.get("lesson", "")
+    if apply_when:
+        return f"[{category} | {confidence} | when: {apply_when}] {lesson}"
+    return f"[{category} | {confidence}] {lesson}"
 
 
 def _session_section(session_id: str, budget: int) -> str:

@@ -52,6 +52,9 @@ Key implementation decisions and optimizations:
 - The general agent now includes a Reflection node. When verification finds an
   insufficient answer, the reflector extracts a reusable lesson and persists it
   to reflection memory.
+- Reflection memory is structured with `category`, `apply_when`, `lesson`, and
+  `confidence`, so future agents can use it as decision guidance instead of
+  loose notes.
 - The ReAct verifier reads the full execution trace, including tool calls and
   tool observations, so it can correctly verify whether tool-backed answers are
   grounded.
@@ -113,7 +116,7 @@ Coding-agent prompts are scaffolded in `app/coding_prompts.py`:
 - `editor`: apply scoped code changes while preserving project style.
 - `tester`: run the smallest useful validation commands and capture failures.
 - `debugger`: analyze failures and propose the next minimal fix.
-- `reflector`: persist reusable engineering lessons only when valuable.
+- `reflector`: persist structured reusable lessons only when valuable.
 - `writer`: report changes, verification results, and residual risks.
 
 ## Configuration

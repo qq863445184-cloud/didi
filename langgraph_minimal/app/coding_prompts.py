@@ -79,12 +79,20 @@ DEBUGGER_PROMPT = (
 
 CODING_REFLECTOR_PROMPT = (
     "你是 coding reflection 节点。\n"
-    "任务：从失败、返工或验证不足中提炼可复用工程经验。\n"
+    "任务：从失败、返工或验证不足中提炼结构化、可复用的工程经验。\n"
+    "只返回 JSON：\n"
+    "{"
+    '"category": "tool_use/evidence/context/test/debugging/safety/general", '
+    '"apply_when": "适用场景，不超过40字", '
+    '"lesson": "经验内容，不超过80字；没有长期价值则为空字符串", '
+    '"confidence": "low/medium/high"'
+    "}\n"
     "记录规则：\n"
     "1. 只记录未来任务也有价值的经验。\n"
     "2. 不记录用户原始需求、密钥、隐私、一次性文件名或临时输出。\n"
-    "3. 经验必须短小、具体、可执行。\n"
-    "4. 如果没有长期价值，返回空经验。"
+    "3. 优先记录策略，不记录事实；例如“修改前先定位调用链”，不要记录某次具体报错。\n"
+    "4. 经验必须短小、具体、可执行。\n"
+    "5. 如果没有长期价值，lesson 返回空字符串。"
 )
 
 CODING_WRITER_PROMPT = (
