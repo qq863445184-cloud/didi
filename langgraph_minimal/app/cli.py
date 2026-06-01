@@ -45,6 +45,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run the minimal LangGraph agent.")
     parser.add_argument("question", nargs="*", help="Question or task for one-shot mode.")
     parser.add_argument("--chat", action="store_true", help="Start interactive chat mode.")
+    parser.add_argument("--plan", action="store_true", help="Create a coding plan without editing.")
     parser.add_argument("--rag", action="store_true", help="Use the explicit agentic RAG graph.")
     parser.add_argument("--general", action="store_true", help="Force the general tool agent.")
     parser.add_argument("--session", default="default", help="Conversation memory session id.")
@@ -57,6 +58,11 @@ def main(argv: list[str] | None = None) -> int:
         question = " ".join(args.question).strip()
         if not question:
             question = "现在北京时间几点？请先用工具获取时间，再用一句话回答。"
+        if args.plan:
+            from app.runner import answer_question
+
+            print(answer_question(question, mode="plan", session_id=args.session))
+            return 0
         if args.rag:
             from app.runner import answer_question
 

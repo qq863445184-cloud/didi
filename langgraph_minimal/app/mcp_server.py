@@ -18,6 +18,12 @@ def project_rag(question: str, session_id: str = "default") -> str:
 
 
 @mcp.tool()
+def coding_plan(question: str, session_id: str = "default") -> str:
+    """Create a coding plan without editing files or running commands."""
+    return answer_question(question, "plan", session_id=session_id)
+
+
+@mcp.tool()
 def search_project_docs(query: str, top_k: int = 5) -> str:
     """Search project documents and return cited chunks."""
     from app.rag import format_search_results

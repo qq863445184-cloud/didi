@@ -7,7 +7,11 @@ def answer_question(
     session_id: str = "default",
     persist: bool = True,
 ) -> str:
-    if mode == "rag":
+    if mode == "plan":
+        from app.planning_graph import make_plan
+
+        answer = make_plan(question, session_id=session_id)
+    elif mode == "rag":
         from app.rag_graph import answer_with_rag
 
         answer = answer_with_rag(question, session_id=session_id)

@@ -15,6 +15,8 @@ and protocol adapters.
   `retrieve -> verify -> retry if needed -> writer -> END`.
 - Auto router graph:
   project/code/RAG questions go to RAG; general tasks go to the ReAct agent.
+- Explicit planning mode:
+  `collect_context -> planner -> END`, using intake/repo/locator/planner prompts.
 - Tool calling:
   time, calculator, project file listing, project file reading, project document search.
 - LangChain RAG:
@@ -163,6 +165,7 @@ RAG_RERANKER_MODEL=BAAI/bge-reranker-base
 RAG_VERIFY_ENABLED=false
 RAG_MAX_ATTEMPTS=1
 RECURSION_LIMIT=10
+PLAN_LLM_ENABLED=false
 ```
 
 Available tools:
@@ -218,6 +221,20 @@ router -> general agent
 ```
 
 Use `--general` to force the general tool agent, or `--rag` to force RAG.
+Use `--plan` to create a coding plan without editing files or running commands.
+
+Planning mode runs:
+
+```text
+collect_context -> planner -> END
+```
+
+It outputs task understanding, related files, modification plan, verification
+plan, and risks. The planner prompt still includes intake, repo inspection, and
+locator responsibilities, but the implementation uses one model call for lower
+latency. By default `PLAN_LLM_ENABLED=false`, so planning mode uses a fast local
+evidence-based plan scaffold. Set `PLAN_LLM_ENABLED=true` to let the LLM write a
+fuller plan; if the model call fails, it still falls back to the local scaffold.
 
 Memory is split into four layers:
 
@@ -256,6 +273,7 @@ python -m app.cli "请计算 19*24"
 python -m app.cli "读取 README.md 并总结一下"
 python -m app.cli --rag "这个 agent 当前 RAG 用了哪些高级检索技术？"
 python -m app.cli --general "现在北京时间几点？"
+python -m app.cli --plan "把 general agent 的 prompt 优化成更适合编码任务"
 python -m app.cli --session dev "继续刚才的问题"
 ```
 
@@ -310,7 +328,8 @@ WS   /ws
 ```
 
 `POST /ask`, `POST /rag`, SSE, WebSocket, and A2A requests all accept
-`session_id` so callers can keep separate conversation memories.
+`session_id` so callers can keep separate conversation memories. `POST /ask`
+also accepts `mode=plan`.
 
 MCP stdio server:
 
@@ -322,6 +341,7 @@ MCP tools:
 
 ```text
 agent_ask
+coding_plan
 project_rag
 search_project_docs
 calculate

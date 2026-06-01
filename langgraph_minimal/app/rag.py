@@ -16,7 +16,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from app.config import get_settings
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-EXCLUDED_NAMES = {".env", ".venv", "__pycache__", ".git"}
+EXCLUDED_NAMES = {".env", ".venv", "__pycache__", ".git", "memory"}
 TEXT_SUFFIXES = {".md", ".py", ".txt", ".json", ".json5", ".toml", ".yaml", ".yml"}
 
 _VECTOR_STORE: InMemoryVectorStore | None = None

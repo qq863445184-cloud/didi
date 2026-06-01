@@ -13,7 +13,7 @@ app = FastAPI(title="LangGraph Minimal Agent Protocol Server")
 
 class AskRequest(BaseModel):
     question: str = Field(..., min_length=1)
-    mode: Literal["auto", "general", "rag"] = "auto"
+    mode: Literal["auto", "general", "rag", "plan"] = "auto"
     session_id: str = "default"
 
 
@@ -46,7 +46,7 @@ def rag(request: AskRequest) -> AskResponse:
 @app.get("/events/ask")
 def ask_events(
     question: str,
-    mode: Literal["auto", "general", "rag"] = "auto",
+    mode: Literal["auto", "general", "rag", "plan"] = "auto",
     session_id: str = "default",
 ):
     def stream():
@@ -78,13 +78,18 @@ def agent_card() -> dict[str, Any]:
         "url": "http://localhost:8000/a2a",
         "capabilities": {
             "streaming": True,
-            "modes": ["auto", "general", "rag"],
+            "modes": ["auto", "general", "rag", "plan"],
         },
         "skills": [
             {
                 "id": "ask",
                 "name": "Ask",
                 "description": "Answer a user question using automatic routing.",
+            },
+            {
+                "id": "plan",
+                "name": "Plan",
+                "description": "Create a coding plan without editing files.",
             },
             {
                 "id": "rag",
