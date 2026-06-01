@@ -1,10 +1,11 @@
 from collections.abc import Iterable
 
-from app.memory import load_profile, load_project_memory, load_session
+from app.memory import load_profile, load_project_memory, load_reflections, load_session
 
 SYSTEM_BUDGET = 1200
 PROFILE_BUDGET = 900
 PROJECT_BUDGET = 1400
+REFLECTION_BUDGET = 1000
 SESSION_BUDGET = 1200
 EVIDENCE_BUDGET = 9000
 
@@ -14,6 +15,7 @@ def build_system_context(base_instruction: str, session_id: str = "default") -> 
         _section("系统指令", [base_instruction], SYSTEM_BUDGET),
         _profile_section(PROFILE_BUDGET),
         _project_section(PROJECT_BUDGET),
+        _reflection_section(REFLECTION_BUDGET),
         _session_section(session_id, SESSION_BUDGET),
     ]
     return "\n\n".join(section for section in sections if section)
@@ -50,6 +52,16 @@ def _project_section(budget: int) -> str:
     lines.extend(f"项目决策：{item}" for item in project.get("decisions", []))
     lines.extend(f"已知问题：{item}" for item in project.get("issues", []))
     return _section("项目记忆", lines, budget)
+
+
+def _reflection_section(budget: int) -> str:
+    reflections = load_reflections()
+    lines = [
+        f"经验：{item.get('lesson')}"
+        for item in reflections.get("lessons", [])[-8:]
+        if item.get("lesson")
+    ]
+    return _section("反思记忆", lines, budget)
 
 
 def _session_section(session_id: str, budget: int) -> str:

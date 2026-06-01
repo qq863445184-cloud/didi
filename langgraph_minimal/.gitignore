@@ -4,4 +4,5 @@ __pycache__/
 *.pyc
 memory/profile.json
 memory/project.json
+memory/reflections.json
 memory/sessions/

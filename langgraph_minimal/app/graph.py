@@ -38,6 +38,7 @@ class ReActState(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
     plan: NotRequired[str]
     verifier_note: NotRequired[str]
+    reflection_note: NotRequired[str]
     verify_attempts: NotRequired[int]
     final_answer: NotRequired[str]
 
@@ -73,6 +74,19 @@ def _parse_verifier_note(text: str) -> dict:
             except json.JSONDecodeError:
                 pass
     return {"sufficient": True, "reason": "Verifier returned non-JSON output."}
+
+
+def _parse_reflection_note(text: str) -> dict:
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group(0))
+            except json.JSONDecodeError:
+                pass
+    return {"lesson": ""}
 
 
 def build_graph():
@@ -159,11 +173,48 @@ def build_graph():
         )
         return {"verifier_note": response.content, "verify_attempts": attempts}
 
+    def reflector(state: ReActState, config: RunnableConfig | None = None):
+        parsed = _parse_verifier_note(state.get("verifier_note", ""))
+        if parsed.get("sufficient", True):
+            return {"reflection_note": ""}
+
+        session_id = (config or {}).get("configurable", {}).get("session_id", "default")
+        response = base_llm.invoke(
+            [
+                SystemMessage(
+                    content=build_system_context(
+                        (
+                            "你是 Reflection 节点。请从失败或不足的执行中提炼一条可复用经验。\n"
+                            "只返回 JSON："
+                            '{"lesson": "一条不超过80字的中文经验；没有价值则写空字符串"}\n'
+                            "不要记录密钥、隐私、临时问题文本或一次性结果。"
+                        ),
+                        session_id=session_id,
+                    )
+                ),
+                HumanMessage(
+                    content=(
+                        f"用户任务：{state['messages'][0].content}\n\n"
+                        f"执行计划：{state.get('plan', '')}\n\n"
+                        f"验证反馈：{state.get('verifier_note', '')}\n\n"
+                        f"执行轨迹：\n{_format_trace(state['messages'])}"
+                    )
+                ),
+            ]
+        )
+        reflection = _parse_reflection_note(response.content)
+        lesson = str(reflection.get("lesson", "")).strip()
+        if lesson:
+            from app.memory import append_reflection
+
+            append_reflection(lesson)
+        return {"reflection_note": lesson}
+
     def writer(state: ReActState):
         answer = _last_ai_content(state["messages"])
         return {"final_answer": answer}
 
-    def route_after_verifier(state: ReActState) -> str:
+    def route_after_reflector(state: ReActState) -> str:
         parsed = _parse_verifier_note(state.get("verifier_note", ""))
         if not parsed.get("sufficient", True) and state.get("verify_attempts", 0) < 2:
             return "agent"
@@ -174,6 +225,7 @@ def build_graph():
     builder.add_node("agent", agent)
     builder.add_node("tools", ToolNode(TOOLS))
     builder.add_node("verifier", verifier)
+    builder.add_node("reflector", reflector)
     builder.add_node("writer", writer)
     builder.add_edge(START, "planner")
     builder.add_edge("planner", "agent")
@@ -183,9 +235,10 @@ def build_graph():
         {"tools": "tools", "__end__": "verifier"},
     )
     builder.add_edge("tools", "agent")
+    builder.add_edge("verifier", "reflector")
     builder.add_conditional_edges(
-        "verifier",
-        route_after_verifier,
+        "reflector",
+        route_after_reflector,
         {"agent": "agent", "writer": "writer"},
     )
     builder.add_edge("writer", END)
@@ -202,6 +255,7 @@ def run_once(question: str, session_id: str = "default") -> str:
             "messages": [HumanMessage(content=question)],
             "plan": "",
             "verifier_note": "",
+            "reflection_note": "",
             "verify_attempts": 0,
             "final_answer": "",
         },

@@ -7,6 +7,7 @@ MEMORY_ROOT = PROJECT_ROOT / "memory"
 SESSIONS_ROOT = MEMORY_ROOT / "sessions"
 PROFILE_PATH = MEMORY_ROOT / "profile.json"
 PROJECT_MEMORY_PATH = MEMORY_ROOT / "project.json"
+REFLECTIONS_PATH = MEMORY_ROOT / "reflections.json"
 
 DEFAULT_PROFILE = {
     "language": "zh-CN",
@@ -27,10 +28,12 @@ DEFAULT_PROJECT_MEMORY = {
         "项目使用 LangGraph 编排 agent 流程",
         "项目使用 LangChain 构建本地 RAG 检索链路",
         "默认 CLI 通过 router 自动分流 general agent 和 agentic RAG",
+        "General agent 使用 ReAct + Reflection 图",
     ],
     "decisions": [
         "Working Memory 保留在 LangGraph State 中，不落盘",
         "Conversation Memory、Profile Memory、Project Memory 落盘",
+        "Reflection Memory 落盘到 memory/reflections.json",
         "默认 RAG 使用 fast mode，保留 sentence_transformers 作为高质量模式",
     ],
     "issues": [
@@ -44,6 +47,10 @@ DEFAULT_SESSION = {
     "recent_messages": [],
 }
 
+DEFAULT_REFLECTIONS = {
+    "lessons": [],
+}
+
 
 def ensure_memory_files() -> None:
     MEMORY_ROOT.mkdir(exist_ok=True)
@@ -52,6 +59,8 @@ def ensure_memory_files() -> None:
         _write_json(PROFILE_PATH, DEFAULT_PROFILE)
     if not PROJECT_MEMORY_PATH.exists():
         _write_json(PROJECT_MEMORY_PATH, DEFAULT_PROJECT_MEMORY)
+    if not REFLECTIONS_PATH.exists():
+        _write_json(REFLECTIONS_PATH, DEFAULT_REFLECTIONS)
 
 
 def load_profile() -> dict[str, Any]:
@@ -70,6 +79,11 @@ def load_session(session_id: str = "default") -> dict[str, Any]:
     if not path.exists():
         _write_json(path, DEFAULT_SESSION)
     return _read_json(path, DEFAULT_SESSION)
+
+
+def load_reflections() -> dict[str, Any]:
+    ensure_memory_files()
+    return _read_json(REFLECTIONS_PATH, DEFAULT_REFLECTIONS)
 
 
 def save_session(session: dict[str, Any], session_id: str = "default") -> None:
@@ -96,6 +110,22 @@ def append_session_turn(user: str, assistant: str, session_id: str = "default") 
     save_session(session, session_id)
 
 
+def append_reflection(lesson: str, source: str = "react") -> None:
+    lesson = " ".join(lesson.strip().split())
+    if not lesson or lesson.lower() in {"none", "无", "无需记录"}:
+        return
+
+    reflections = load_reflections()
+    lessons = reflections.setdefault("lessons", [])
+    item = {"source": source, "lesson": lesson}
+    if item in lessons:
+        return
+
+    lessons.append(item)
+    reflections["lessons"] = lessons[-20:]
+    _write_json(REFLECTIONS_PATH, reflections)
+
+
 def get_memory_context(session_id: str = "default") -> str:
     profile = load_profile()
     project = load_project_memory()
@@ -111,6 +141,12 @@ def get_memory_context(session_id: str = "default") -> str:
     lines.extend(f"- Project fact: {item}" for item in project.get("facts", []))
     lines.extend(f"- Project decision: {item}" for item in project.get("decisions", []))
     lines.extend(f"- Known issue: {item}" for item in project.get("issues", []))
+
+    reflections = load_reflections()
+    lines.extend(
+        f"- Reflection lesson: {item.get('lesson')}"
+        for item in reflections.get("lessons", [])[-6:]
+    )
 
     summary = session.get("summary", "")
     if summary:
@@ -162,4 +198,3 @@ def _read_json(path: Path, fallback: dict[str, Any]) -> dict[str, Any]:
 def _write_json(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-

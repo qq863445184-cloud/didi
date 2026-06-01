@@ -9,8 +9,8 @@ and protocol adapters.
 这个项目目前已经实现：
 
 - OpenAI-compatible LLM access, default model name `gpt-5.5`.
-- General ReAct agent:
-  `planner -> agent -> tools -> agent -> verifier -> writer -> END`.
+- General ReAct + Reflection agent:
+  `planner -> agent -> tools -> agent -> verifier -> reflector -> writer -> END`.
 - Explicit agentic RAG graph:
   `retrieve -> verify -> retry if needed -> writer -> END`.
 - Auto router graph:
@@ -22,7 +22,8 @@ and protocol adapters.
   sparse BM25 retrieval, RRF fusion, neighbor chunk expansion, optional query
   rewriting, optional verifier retry, optional reranking.
 - Layered memory:
-  working memory, conversation memory, profile memory, and project memory.
+  working memory, conversation memory, profile memory, project memory, and
+  reflection memory.
 - Context engineering:
   system instruction, profile memory, project memory, conversation memory,
   question, verifier notes, and evidence are assembled with budgets and dedup.
@@ -48,6 +49,9 @@ Key implementation decisions and optimizations:
   endpoint supports embeddings.
 - The general agent was upgraded from a simple tool loop to an explicit ReAct
   workflow with planning and verification.
+- The general agent now includes a Reflection node. When verification finds an
+  insufficient answer, the reflector extracts a reusable lesson and persists it
+  to reflection memory.
 - The ReAct verifier reads the full execution trace, including tool calls and
   tool observations, so it can correctly verify whether tool-backed answers are
   grounded.
@@ -58,6 +62,8 @@ Key implementation decisions and optimizations:
 - One-shot CLI/API/MCP calls persist conversation turns, not only `--chat` mode.
 - RAG evidence is trimmed by evidence block, preserving `Source` labels as much
   as possible for citation quality.
+- Reflection memory is loaded into the system context so future runs can benefit
+  from previous failure lessons.
 - File tools are sandboxed to `langgraph_minimal` and hide `.env`, `.venv`, and
   `__pycache__`.
 
@@ -108,15 +114,16 @@ reranking are available but disabled in the fast default config. Enable
 quality at higher latency. Set `RAG_RERANKER_PROVIDER=cross_encoder` to try a
 local cross-encoder reranker.
 
-The general agent uses an explicit ReAct graph:
+The general agent uses an explicit ReAct + Reflection graph:
 
 ```text
-planner -> agent -> tools -> agent -> verifier -> writer -> END
+planner -> agent -> tools -> agent -> verifier -> reflector -> writer -> END
 ```
 
 The `agent -> tools -> agent` loop may run repeatedly when the model decides it
 needs tool observations. The verifier can send the task back to the agent once
-when the candidate answer is not sufficiently grounded.
+when the candidate answer is not sufficiently grounded. The reflector records
+reusable failure lessons before retrying or finishing.
 
 For explicit agentic RAG, use `--rag`. This runs:
 
@@ -143,6 +150,7 @@ Memory is split into four layers:
 - Conversation memory: `memory/sessions/<session>.json`.
 - Profile memory: `memory/profile.json`.
 - Project memory: `memory/project.json`.
+- Reflection memory: `memory/reflections.json`.
 
 Context is assembled through `app/context.py` instead of directly concatenating
 memory and evidence. It separates system instructions, user profile, project
