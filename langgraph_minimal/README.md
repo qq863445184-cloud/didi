@@ -224,6 +224,9 @@ router -> general agent
 
 Use `--general` to force the general tool agent, or `--rag` to force RAG.
 Use `--plan` to create a coding plan without editing files or running commands.
+Use `--trace` to print a detailed general-agent execution trace with node
+outputs, tool calls, tool observations, verifier notes, reflection notes, and
+the final answer.
 
 Planning mode runs:
 
@@ -275,6 +278,7 @@ python -m app.cli "请计算 19*24"
 python -m app.cli "读取 README.md 并总结一下"
 python -m app.cli --rag "这个 agent 当前 RAG 用了哪些高级检索技术？"
 python -m app.cli --general "现在北京时间几点？"
+python -m app.cli --trace "你好，请帮我查询一下今天北京的天气，然后根据天气推荐一个合适的旅游景点"
 python -m app.cli --plan "把 general agent 的 prompt 优化成更适合编码任务"
 python -m app.cli --session dev "继续刚才的问题"
 ```

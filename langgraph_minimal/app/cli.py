@@ -48,6 +48,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--plan", action="store_true", help="Create a coding plan without editing.")
     parser.add_argument("--rag", action="store_true", help="Use the explicit agentic RAG graph.")
     parser.add_argument("--general", action="store_true", help="Force the general tool agent.")
+    parser.add_argument("--trace", action="store_true", help="Print detailed general-agent trace.")
     parser.add_argument("--session", default="default", help="Conversation memory session id.")
     args = parser.parse_args(argv)
 
@@ -62,6 +63,14 @@ def main(argv: list[str] | None = None) -> int:
             from app.runner import answer_question
 
             print(answer_question(question, mode="plan", session_id=args.session))
+            return 0
+        if args.trace:
+            from app.graph import run_with_trace
+            from app.memory import append_session_turn
+
+            answer, trace = run_with_trace(question, session_id=args.session)
+            append_session_turn(question, answer, session_id=args.session)
+            print(trace)
             return 0
         if args.rag:
             from app.runner import answer_question

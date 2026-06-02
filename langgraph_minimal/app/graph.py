@@ -63,6 +63,44 @@ def _format_trace(messages: list[AnyMessage]) -> str:
     return "\n".join(lines)
 
 
+def _message_to_trace(message: AnyMessage) -> dict:
+    data = {
+        "type": message.__class__.__name__,
+        "content": message.content,
+    }
+    tool_calls = getattr(message, "tool_calls", None)
+    if tool_calls:
+        data["tool_calls"] = tool_calls
+    tool_call_id = getattr(message, "tool_call_id", None)
+    if tool_call_id:
+        data["tool_call_id"] = tool_call_id
+    name = getattr(message, "name", None)
+    if name:
+        data["name"] = name
+    return data
+
+
+def _format_trace_event(index: int, event: dict) -> str:
+    lines = [f"## Step {index}: {event['node']}"]
+    data = event.get("data", {})
+    for key, value in data.items():
+        if key == "messages":
+            lines.append("### messages")
+            for message in value:
+                lines.append("```json")
+                lines.append(json.dumps(_message_to_trace(message), ensure_ascii=False, indent=2))
+                lines.append("```")
+        else:
+            lines.append(f"### {key}")
+            if isinstance(value, str):
+                lines.append(value or "(empty)")
+            else:
+                lines.append("```json")
+                lines.append(json.dumps(value, ensure_ascii=False, indent=2, default=str))
+                lines.append("```")
+    return "\n".join(lines)
+
+
 def _parse_verifier_note(text: str) -> dict:
     try:
         return json.loads(text)
@@ -278,6 +316,40 @@ def run_once(question: str, session_id: str = "default") -> str:
         },
     )
     return result.get("final_answer") or result["messages"][-1].content
+
+
+def run_with_trace(question: str, session_id: str = "default") -> tuple[str, str]:
+    settings = get_settings()
+    initial_state = {
+        "messages": [HumanMessage(content=question)],
+        "plan": "",
+        "verifier_note": "",
+        "reflection_note": "",
+        "verify_attempts": 0,
+        "final_answer": "",
+    }
+    config = {
+        "recursion_limit": settings.recursion_limit,
+        "configurable": {"session_id": session_id},
+    }
+
+    events = []
+    final_answer = ""
+    for update in graph.stream(initial_state, config=config, stream_mode="updates"):
+        for node, data in update.items():
+            events.append({"node": node, "data": data})
+            if isinstance(data, dict) and data.get("final_answer"):
+                final_answer = data["final_answer"]
+
+    trace_sections = [
+        "# Agent Trace",
+        f"Question: {question}",
+        "",
+        *[_format_trace_event(index, event) for index, event in enumerate(events, start=1)],
+    ]
+    if final_answer:
+        trace_sections.extend(["", "## Final Answer", final_answer])
+    return final_answer, "\n\n".join(trace_sections)
 
 
 if __name__ == "__main__":
