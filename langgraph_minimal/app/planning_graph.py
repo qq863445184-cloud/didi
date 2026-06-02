@@ -28,12 +28,13 @@ class PlanningState(TypedDict):
 
 def _llm() -> ChatOpenAI:
     settings = get_settings()
+    timeout = int(os.getenv("PLAN_LLM_TIMEOUT", "60"))
     return ChatOpenAI(
         api_key=settings.openai_api_key,
         base_url=settings.openai_base_url,
         model=settings.model_name,
         temperature=0,
-        timeout=8,
+        timeout=timeout,
         max_retries=0,
     )
 
