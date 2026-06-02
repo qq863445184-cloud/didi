@@ -47,5 +47,13 @@ def get_current_time() -> str:
     return time_tool.invoke({})
 
 
+@mcp.tool()
+def get_weather(city: str = "北京") -> str:
+    """Get today's current weather for a city."""
+    from app.tools import get_weather as weather_tool
+
+    return weather_tool.invoke({"city": city})
+
+
 if __name__ == "__main__":
     mcp.run()

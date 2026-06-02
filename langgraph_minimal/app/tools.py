@@ -1,7 +1,9 @@
 from ast import Add, BinOp, Constant, Div, Expression, Mult, Sub, UAdd, USub, UnaryOp, parse
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from time import sleep
 
+import requests
 from langchain_core.tools import tool
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -13,6 +15,108 @@ def get_current_time() -> str:
     """Get the current date and time in UTC+8."""
     now = datetime.now(timezone(timedelta(hours=8)))
     return now.strftime("%Y-%m-%d %H:%M:%S UTC+08:00")
+
+
+@tool
+def get_weather(city: str = "北京") -> str:
+    """Get today's current weather for a city using Open-Meteo."""
+    try:
+        latitude, longitude, name = _geocode_city(city)
+        response = _get_json(
+            "https://api.open-meteo.com/v1/forecast",
+            params={
+                "latitude": latitude,
+                "longitude": longitude,
+                "current": (
+                    "temperature_2m,relative_humidity_2m,apparent_temperature,"
+                    "precipitation,weather_code,wind_speed_10m"
+                ),
+                "timezone": "Asia/Shanghai",
+            },
+        )
+        payload = response
+    except Exception as exc:
+        return f"Weather error: {exc}"
+
+    current = payload.get("current", {})
+    weather_code = current.get("weather_code")
+    weather = _weather_code_text(weather_code)
+    return "\n".join(
+        [
+            f"City: {name}",
+            f"Time: {current.get('time', 'unknown')}",
+            f"Weather: {weather}",
+            f"Temperature: {current.get('temperature_2m', 'unknown')}°C",
+            f"Feels like: {current.get('apparent_temperature', 'unknown')}°C",
+            f"Humidity: {current.get('relative_humidity_2m', 'unknown')}%",
+            f"Precipitation: {current.get('precipitation', 'unknown')} mm",
+            f"Wind speed: {current.get('wind_speed_10m', 'unknown')} km/h",
+            "Source: Open-Meteo",
+        ]
+    )
+
+
+def _get_json(url: str, params: dict, attempts: int = 3, timeout: int = 20) -> dict:
+    last_error = None
+    for attempt in range(attempts):
+        try:
+            response = requests.get(url, params=params, timeout=timeout)
+            response.raise_for_status()
+            return response.json()
+        except Exception as exc:
+            last_error = exc
+            if attempt < attempts - 1:
+                sleep(1 + attempt)
+    raise RuntimeError(last_error)
+
+
+def _geocode_city(city: str) -> tuple[float, float, str]:
+    city = city.strip() or "北京"
+    if city in {"北京", "北京市", "Beijing", "beijing"}:
+        return 39.9042, 116.4074, "北京, 中国"
+
+    payload = _get_json(
+        "https://geocoding-api.open-meteo.com/v1/search",
+        params={"name": city, "count": 1, "language": "zh", "format": "json"},
+    )
+    results = payload.get("results") or []
+    if not results:
+        raise ValueError(f"Cannot geocode city: {city}")
+    result = results[0]
+    name_parts = [
+        str(result.get("name", city)),
+        str(result.get("admin1", "")),
+        str(result.get("country", "")),
+    ]
+    display_name = ", ".join(part for part in name_parts if part)
+    return float(result["latitude"]), float(result["longitude"]), display_name
+
+
+def _weather_code_text(code) -> str:
+    descriptions = {
+        0: "晴朗",
+        1: "大部晴朗",
+        2: "局部多云",
+        3: "阴天",
+        45: "雾",
+        48: "雾凇",
+        51: "小毛毛雨",
+        53: "中等毛毛雨",
+        55: "强毛毛雨",
+        61: "小雨",
+        63: "中雨",
+        65: "大雨",
+        71: "小雪",
+        73: "中雪",
+        75: "大雪",
+        80: "小阵雨",
+        81: "中等阵雨",
+        82: "强阵雨",
+        95: "雷暴",
+        96: "雷暴伴小冰雹",
+        99: "雷暴伴大冰雹",
+    }
+    return descriptions.get(code, f"未知天气代码 {code}")
 
 
 def _eval_expr(node) -> float:
@@ -121,4 +225,11 @@ def search_project_docs(query: str, top_k: int = 5) -> str:
     return format_search_results(query=query, top_k=top_k)
 
 
-TOOLS = [get_current_time, calculate, list_files, read_text_file, search_project_docs]
+TOOLS = [
+    get_current_time,
+    get_weather,
+    calculate,
+    list_files,
+    read_text_file,
+    search_project_docs,
+]

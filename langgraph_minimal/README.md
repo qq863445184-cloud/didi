@@ -18,7 +18,8 @@ and protocol adapters.
 - Explicit planning mode:
   `collect_context -> planner -> END`, using intake/repo/locator/planner prompts.
 - Tool calling:
-  time, calculator, project file listing, project file reading, project document search.
+  time, weather, calculator, project file listing, project file reading,
+  project document search.
 - LangChain RAG:
   document loading, recursive chunking, in-memory vector store, dense retrieval,
   sparse BM25 retrieval, RRF fusion, neighbor chunk expansion, optional query
@@ -171,6 +172,7 @@ PLAN_LLM_ENABLED=false
 Available tools:
 
 - `get_current_time`: get the current time in UTC+8.
+- `get_weather`: get today's current weather for a city using Open-Meteo.
 - `calculate`: evaluate basic arithmetic.
 - `list_files`: list non-hidden files inside this project.
 - `read_text_file`: read a UTF-8 text file inside this project.
@@ -292,6 +294,7 @@ Example questions:
 
 ```text
 现在北京时间几点？
+你好，请帮我查询一下今天北京的天气，然后根据天气推荐一个合适的旅游景点。
 请计算 19*24。
 读取 README.md 并总结一下。
 搜索项目文档，说明这个 agent 有哪些工具，并带引用。
@@ -346,4 +349,5 @@ project_rag
 search_project_docs
 calculate
 get_current_time
+get_weather
 ```
