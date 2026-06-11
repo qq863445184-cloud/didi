@@ -97,3 +97,27 @@ def test_semantic_memory_can_disable_graph_extraction():
 
     assert graph_store.entities == {}
     assert graph_store.relationships == []
+
+
+def test_semantic_memory_recalls_records_through_entity_graph_when_vector_misses():
+    graph_store = FakeGraphStore()
+    store = SemanticMemoryStore(
+        embedder=FakeEmbedder(),
+        vector_store=FakeVectorStore(),
+        graph_store=graph_store,
+        entity_extractor=FakeEntityExtractor(),
+    )
+    store.add(
+        MemoryRecord(
+            content="Python 是构建 Agent 工具链时常用的语言。",
+            memory_type="semantic",
+            importance=0.9,
+        )
+    )
+
+    results = store.search("Python", limit=3)
+
+    assert len(results) == 1
+    assert results[0].source == "semantic_graph"
+    assert results[0].record.content == "Python 是构建 Agent 工具链时常用的语言。"
+    assert results[0].record.access_count == 1

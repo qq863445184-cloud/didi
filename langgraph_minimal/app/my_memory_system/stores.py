@@ -327,54 +327,333 @@ class SemanticMemoryStore:
 
         now = time()
         by_id = {r.memory_id: r for r in self.records}
-        results: list[MemorySearchResult] = []
+        results_by_id: dict[str, MemorySearchResult] = {}
         seen_contents: set[str] = set()
         for hit in hits:
-            meta = hit.get("metadata", {}) or {}
-            content = str(meta.get("content", ""))
-            if not content:
+            result = self._result_from_vector_hit(
+                hit,
+                by_id=by_id,
+                now=now,
+            )
+            if result is None:
                 continue
-            if content in seen_contents:
+            if result.record.content in seen_contents:
                 continue
-            seen_contents.add(content)
-            created_at = float(meta.get("created_at", 0.0))
-            importance = float(meta.get("importance", 0.5))
-            memory_id = str(meta.get("memory_id", hit.get("id")))
-            # 优先回查进程内的真实记录，拿到累积的 access_count；回查不到再从 meta 重建。
-            record = by_id.get(memory_id)
-            if record is None:
-                record = MemoryRecord(
-                    content=content,
-                    memory_type=str(meta.get("memory_type", "semantic")),
-                    importance=importance,
-                    metadata={key: value for key, value in meta.items() if key not in {
+            seen_contents.add(result.record.content)
+            results_by_id[result.record.memory_id] = result
+
+        for graph_result in self._search_semantic_graph(
+            query,
+            limit=limit,
+            now=now,
+            by_id=by_id,
+        ):
+            existing = results_by_id.get(graph_result.record.memory_id)
+            if existing is None:
+                results_by_id[graph_result.record.memory_id] = graph_result
+                continue
+            # 同一条记忆同时被“向量相似度”和“实体图关系”命中，说明它既语义相近
+            # 又有明确实体关联；给一个小幅加成，并标记为 hybrid 方便 trace/调试。
+            existing.score = max(existing.score, graph_result.score) + 0.05
+            existing.source = "semantic_hybrid"
+
+        results = sorted(
+            results_by_id.values(),
+            key=lambda item: item.score,
+            reverse=True,
+        )[:limit]
+        for item in results:
+            item.record.reinforce(now)
+            self._persist_access(item.record)
+        return results
+
+    def _result_from_vector_hit(
+        self,
+        hit: dict[str, Any],
+        *,
+        by_id: dict[str, MemoryRecord],
+        now: float,
+    ) -> MemorySearchResult | None:
+        meta = hit.get("metadata", {}) or {}
+        content = str(meta.get("content", ""))
+        if not content:
+            return None
+        created_at = float(meta.get("created_at", 0.0))
+        importance = float(meta.get("importance", 0.5))
+        memory_id = str(meta.get("memory_id", hit.get("id")))
+        # 优先回查进程内的真实记录，拿到累积的 access_count；回查不到再从 meta 重建。
+        record = by_id.get(memory_id)
+        if record is None:
+            record = MemoryRecord(
+                content=content,
+                memory_type=str(meta.get("memory_type", "semantic")),
+                importance=importance,
+                metadata={
+                    key: value
+                    for key, value in meta.items()
+                    if key
+                    not in {
                         "content",
                         "memory_type",
                         "importance",
                         "created_at",
                         "memory_id",
-                    }},
-                    memory_id=memory_id,
-                    created_at=created_at,
-                    access_count=int(meta.get("access_count", 0)),
-                )
-            score = combined_score(
-                float(hit.get("score", 0.0)),
-                importance,
+                    }
+                },
+                memory_id=memory_id,
                 created_at=created_at,
-                now=now,
-                half_life_seconds=self.half_life_seconds,
-                recency_weight=self.recency_weight,
-                access_count=record.access_count,
-                access_gain=self.access_gain,
+                access_count=int(meta.get("access_count", 0)),
             )
-            results.append(
-                MemorySearchResult(record=record, score=score, source="semantic")
+        score = combined_score(
+            float(hit.get("score", 0.0)),
+            importance,
+            created_at=created_at,
+            now=now,
+            half_life_seconds=self.half_life_seconds,
+            recency_weight=self.recency_weight,
+            access_count=record.access_count,
+            access_gain=self.access_gain,
+        )
+        return MemorySearchResult(record=record, score=score, source="semantic")
+
+    def _search_semantic_graph(
+        self,
+        query: str,
+        *,
+        limit: int,
+        now: float,
+        by_id: dict[str, MemoryRecord],
+    ) -> list[MemorySearchResult]:
+        """Recall semantic memories through entity mentions stored in Neo4j.
+
+        向量检索擅长“意思相近”，图检索擅长“实体相关”。比如 query 提到
+        Python，而某条语义记忆通过 spaCy 抽取也连接到了 Python 实体，即使
+        embedding 分数不高，也应该被补召回。
+        """
+
+        if not self.enable_graph_index or self.graph_store is None:
+            return []
+
+        entities = self._extract_query_entities(query)
+        if not entities:
+            entities = self._find_entities_by_name(query, limit=limit)
+
+        results_by_id: dict[str, MemorySearchResult] = {}
+        for entity in entities:
+            entity_id = str(entity.get("id") or normalize_entity_id(
+                str(entity.get("name", "")),
+                str(entity.get("type", "Entity")),
+            ))
+            for record in self._records_mentioning_entity(entity_id, by_id=by_id):
+                score = combined_score(
+                    0.85,
+                    record.importance,
+                    created_at=record.created_at,
+                    now=now,
+                    half_life_seconds=self.half_life_seconds,
+                    recency_weight=self.recency_weight,
+                    access_count=record.access_count,
+                    access_gain=self.access_gain,
+                )
+                current = results_by_id.get(record.memory_id)
+                if current is None or score > current.score:
+                    results_by_id[record.memory_id] = MemorySearchResult(
+                        record=record,
+                        score=score,
+                        source="semantic_graph",
+                    )
+
+        return sorted(
+            results_by_id.values(),
+            key=lambda item: item.score,
+            reverse=True,
+        )[:limit]
+
+    def _extract_query_entities(self, query: str) -> list[dict[str, Any]]:
+        try:
+            raw_entities = self.entity_extractor.extract(query) if self.entity_extractor else []
+        except Exception:
+            return []
+
+        entities: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in raw_entities or []:
+            name = str(item.get("name", "")).strip()
+            entity_type = str(item.get("type", "Entity")).strip() or "Entity"
+            if not name:
+                continue
+            entity_id = normalize_entity_id(name, entity_type)
+            if entity_id in seen:
+                continue
+            entities.append({"id": entity_id, "name": name, "type": entity_type})
+            seen.add(entity_id)
+        return entities
+
+    def _find_entities_by_name(self, query: str, *, limit: int) -> list[dict[str, Any]]:
+        finder = getattr(self.graph_store, "search_entities_by_name", None)
+        if finder is None:
+            return []
+        try:
+            rows = finder(name_pattern=query, entity_types=None, limit=limit)
+        except Exception:
+            return []
+        return [
+            row
+            for row in rows or []
+            if str(row.get("id", "")).startswith("entity:")
+        ]
+
+    def _records_mentioning_entity(
+        self,
+        entity_id: str,
+        *,
+        by_id: dict[str, MemoryRecord],
+    ) -> list[MemoryRecord]:
+        records = self._records_mentioning_entity_from_graph_api(entity_id, by_id=by_id)
+        if records:
+            return records
+        records = self._records_mentioning_entity_from_fake_graph(entity_id, by_id=by_id)
+        if records:
+            return records
+        return self._records_mentioning_entity_from_neo4j(entity_id, by_id=by_id)
+
+    def _records_mentioning_entity_from_graph_api(
+        self,
+        entity_id: str,
+        *,
+        by_id: dict[str, MemoryRecord],
+    ) -> list[MemoryRecord]:
+        finder = getattr(self.graph_store, "find_related_entities", None)
+        if finder is None:
+            return []
+        try:
+            rows = finder(
+                entity_id=entity_id,
+                relationship_types=["MENTIONS"],
+                max_depth=1,
+                limit=100,
             )
-        for item in results:
-            item.record.reinforce(now)
-            self._persist_access(item.record)
-        return results
+        except TypeError:
+            try:
+                rows = finder(entity_id, ["MENTIONS"], 1, 100)
+            except Exception:
+                return []
+        except Exception:
+            return []
+        return self._records_from_graph_rows(rows or [], by_id=by_id)
+
+    def _records_mentioning_entity_from_fake_graph(
+        self,
+        entity_id: str,
+        *,
+        by_id: dict[str, MemoryRecord],
+    ) -> list[MemoryRecord]:
+        relationships = getattr(self.graph_store, "relationships", None)
+        entities = getattr(self.graph_store, "entities", None)
+        if not isinstance(relationships, list) or not isinstance(entities, dict):
+            return []
+
+        records: list[MemoryRecord] = []
+        seen: set[str] = set()
+        for rel in relationships:
+            if rel.get("type") != "MENTIONS":
+                continue
+            if rel.get("to") != entity_id:
+                continue
+            memory_node = entities.get(rel.get("from"))
+            record = self._record_from_graph_row(memory_node or {}, by_id=by_id)
+            if record is not None and record.memory_id not in seen:
+                records.append(record)
+                seen.add(record.memory_id)
+        return records
+
+    def _records_mentioning_entity_from_neo4j(
+        self,
+        entity_id: str,
+        *,
+        by_id: dict[str, MemoryRecord],
+    ) -> list[MemoryRecord]:
+        driver = getattr(self.graph_store, "driver", None)
+        if driver is None:
+            return []
+        database = getattr(self.graph_store, "database", "neo4j")
+        try:
+            with driver.session(database=database) as session:
+                rows = session.run(
+                    """
+                    MATCH (memory:Entity)-[:MENTIONS]->(:Entity {id: $entity_id})
+                    WHERE memory.type = 'SemanticMemory'
+                    RETURN memory
+                    LIMIT 100
+                    """,
+                    entity_id=entity_id,
+                )
+                return self._records_from_graph_rows(
+                    [dict(row["memory"]) for row in rows],
+                    by_id=by_id,
+                )
+        except Exception:
+            return []
+
+    def _records_from_graph_rows(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        by_id: dict[str, MemoryRecord],
+    ) -> list[MemoryRecord]:
+        records: list[MemoryRecord] = []
+        seen: set[str] = set()
+        for row in rows:
+            record = self._record_from_graph_row(row, by_id=by_id)
+            if record is not None and record.memory_id not in seen:
+                records.append(record)
+                seen.add(record.memory_id)
+        return records
+
+    def _record_from_graph_row(
+        self,
+        row: dict[str, Any],
+        *,
+        by_id: dict[str, MemoryRecord],
+    ) -> MemoryRecord | None:
+        if not row:
+            return None
+        memory_id = str(row.get("memory_id", "")).strip()
+        if not memory_id and str(row.get("id", "")).startswith("semantic:"):
+            memory_id = str(row["id"]).replace("semantic:", "", 1)
+        if not memory_id:
+            return None
+        record = by_id.get(memory_id)
+        if record is not None:
+            return record
+        content = str(row.get("content") or row.get("name") or "").strip()
+        if not content:
+            return None
+        return MemoryRecord(
+            content=content,
+            memory_type="semantic",
+            importance=float(row.get("importance", 0.5)),
+            metadata={
+                key: value
+                for key, value in row.items()
+                if key
+                not in {
+                    "id",
+                    "name",
+                    "type",
+                    "content",
+                    "memory_id",
+                    "importance",
+                    "created_at_ts",
+                    "access_count",
+                    "last_accessed",
+                }
+            },
+            memory_id=memory_id,
+            created_at=float(row.get("created_at_ts", 0.0) or 0.0),
+            access_count=int(row.get("access_count", 0) or 0),
+            last_accessed=float(row.get("last_accessed", 0.0) or 0.0),
+        )
 
     def summary(self, limit: int = 5) -> list[MemoryRecord]:
         return sorted(
