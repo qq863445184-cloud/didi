@@ -4,6 +4,7 @@ from .document_learning_assistant import (
     DocumentLearningAssistant,
     DocumentLoadResult,
 )
+from .document_learning_ui import DocumentLearningUI, build_gradio_app
 from .entity_extraction import SpacyEntityExtractor
 from .models import MemoryRecord, MemorySearchResult
 from .perception_tool import MyPerceptionTool
@@ -19,6 +20,7 @@ __all__ = [
     "DocumentLearningAnswer",
     "DocumentLearningAssistant",
     "DocumentLoadResult",
+    "DocumentLearningUI",
     "EpisodicMemoryStore",
     "MyMemoryManager",
     "MyMemoryTool",
@@ -34,4 +36,5 @@ __all__ = [
     "importance_factor",
     "recency_factor",
     "access_factor",
+    "build_gradio_app",
 ]
