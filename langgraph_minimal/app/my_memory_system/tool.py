@@ -33,7 +33,10 @@ class MyMemoryTool(Tool):
             ToolParameter(
                 name="action",
                 type="string",
-                description="操作类型：add、search、summary、forget、consolidate",
+                description=(
+                    "操作类型：add、search、summary、stats、update、remove、"
+                    "clear_all、forget、consolidate"
+                ),
                 required=True,
             ),
             ToolParameter(
@@ -51,9 +54,21 @@ class MyMemoryTool(Tool):
             ToolParameter(
                 name="memory_type",
                 type="string",
-                description="记忆类型，当前支持 working，可扩展 semantic、episodic、perceptual",
+                description="记忆类型，支持 working、semantic、episodic、perceptual；search/clear_all 可用 all",
                 required=False,
                 default="working",
+            ),
+            ToolParameter(
+                name="memory_types",
+                type="array",
+                description="跨类型检索列表，例如 ['working', 'semantic']，action=search 时可选",
+                required=False,
+            ),
+            ToolParameter(
+                name="memory_id",
+                type="string",
+                description="记忆 ID，action=update/remove 时使用",
+                required=False,
             ),
             ToolParameter(
                 name="importance",
@@ -68,6 +83,12 @@ class MyMemoryTool(Tool):
                 description="返回结果数量",
                 required=False,
                 default=5,
+            ),
+            ToolParameter(
+                name="min_importance",
+                type="number",
+                description="最低重要性过滤阈值，action=search 时使用",
+                required=False,
             ),
             ToolParameter(
                 name="strategy",
@@ -105,12 +126,24 @@ class MyMemoryTool(Tool):
 
     def validate_parameters(self, parameters: dict[str, Any]) -> bool:
         action = parameters.get("action")
-        if action not in {"add", "search", "summary", "forget", "consolidate"}:
+        if action not in {
+            "add",
+            "search",
+            "summary",
+            "stats",
+            "update",
+            "remove",
+            "clear_all",
+            "forget",
+            "consolidate",
+        }:
             return False
         if action == "add":
             return bool(str(parameters.get("content", "")).strip())
         if action == "search":
             return bool(str(parameters.get("query", "")).strip())
+        if action in {"update", "remove"}:
+            return bool(str(parameters.get("memory_id", "")).strip())
         return True
 
     def run(self, parameters: dict[str, Any]) -> str:
@@ -127,6 +160,14 @@ class MyMemoryTool(Tool):
                 result = self._search(parameters, memory_type)
             elif action == "summary":
                 result = self._summary(parameters, memory_type)
+            elif action == "stats":
+                result = self._stats()
+            elif action == "update":
+                result = self._update(parameters, memory_type)
+            elif action == "remove":
+                result = self._remove(parameters, memory_type)
+            elif action == "clear_all":
+                result = self._clear_all(memory_type)
             elif action == "forget":
                 result = self._forget(parameters, memory_type)
             elif action == "consolidate":
@@ -153,7 +194,13 @@ class MyMemoryTool(Tool):
         results = self.manager.search(
             query=str(parameters["query"]).strip(),
             memory_type=memory_type,
+            memory_types=self._normalize_memory_types(parameters.get("memory_types")),
             limit=int(parameters.get("limit", 5)),
+            min_importance=(
+                float(parameters["min_importance"])
+                if parameters.get("min_importance") is not None
+                else None
+            ),
         )
         return self._format_search_result(results)
 
@@ -163,6 +210,37 @@ class MyMemoryTool(Tool):
             limit=int(parameters.get("limit", 5)),
         )
         return self._format_summary_result(records)
+
+    def _stats(self) -> str:
+        return self._format_stats_result(self.manager.stats())
+
+    def _update(self, parameters: dict[str, Any], memory_type: str) -> str:
+        updated = self.manager.update(
+            memory_id=str(parameters["memory_id"]).strip(),
+            memory_type=memory_type,
+            content=(
+                str(parameters["content"]).strip()
+                if parameters.get("content") is not None
+                else None
+            ),
+            importance=(
+                float(parameters["importance"])
+                if parameters.get("importance") is not None
+                else None
+            ),
+            metadata=self._extract_metadata(parameters),
+        )
+        return self._format_update_result(updated)
+
+    def _remove(self, parameters: dict[str, Any], memory_type: str) -> str:
+        memory_id = str(parameters["memory_id"]).strip()
+        removed = self.manager.remove(memory_id=memory_id, memory_type=memory_type)
+        if not removed:
+            return f"未找到要删除的记忆：id={memory_id}"
+        return f"已删除记忆：id={memory_id} type={memory_type}"
+
+    def _clear_all(self, memory_type: str) -> str:
+        return self._format_clear_result(self.manager.clear_all(memory_type=memory_type))
 
     def _forget(self, parameters: dict[str, Any], memory_type: str) -> str:
         strategy = str(parameters.get("strategy", "importance"))
@@ -196,6 +274,9 @@ class MyMemoryTool(Tool):
             "memory_type",
             "importance",
             "limit",
+            "min_importance",
+            "memory_types",
+            "memory_id",
             "strategy",
             "importance_threshold",
             "max_age_seconds",
@@ -203,6 +284,15 @@ class MyMemoryTool(Tool):
             "target_type",
         }
         return {key: value for key, value in parameters.items() if key not in reserved}
+
+    def _normalize_memory_types(self, value: Any) -> list[str] | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return [item.strip() for item in value.split(",") if item.strip()]
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        return None
 
     def _format_add_result(self, record: MemoryRecord) -> str:
         return (
@@ -238,6 +328,27 @@ class MyMemoryTool(Tool):
                 f"{index}. type={record.memory_type} "
                 f"importance={record.importance:.2f} content={record.content}"
             )
+        return "\n".join(lines)
+
+    def _format_stats_result(self, payload: dict[str, Any]) -> str:
+        lines = [f"记忆统计：user_id={payload['user_id']}", f"total: {payload['total']}"]
+        for memory_type, count in sorted(payload["by_type"].items()):
+            lines.append(f"{memory_type}: {count}")
+        return "\n".join(lines)
+
+    def _format_update_result(self, record: MemoryRecord) -> str:
+        return (
+            "已更新记忆：\n"
+            f"- id: {record.memory_id}\n"
+            f"- type: {record.memory_type}\n"
+            f"- importance: {record.importance:.2f}\n"
+            f"- content: {record.content}"
+        )
+
+    def _format_clear_result(self, removed_by_type: dict[str, int]) -> str:
+        lines = ["已清空记忆："]
+        for memory_type, count in sorted(removed_by_type.items()):
+            lines.append(f"- {memory_type}: {count}")
         return "\n".join(lines)
 
     def _format_forget_result(

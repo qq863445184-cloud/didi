@@ -6,6 +6,7 @@ from time import time
 from typing import Any, Protocol
 
 from .models import MemoryRecord, MemorySearchResult
+from .persistence import JsonMemoryPersistence, record_from_dict, record_to_dict
 from .scoring import combined_score
 
 
@@ -29,6 +30,14 @@ class MemoryStore(Protocol):
         """Remove one record by id; return False if it was not found."""
         ...
 
+    def update(self, memory_id: str, **changes: Any) -> MemoryRecord | None:
+        """Update one record by id; return None if it was not found."""
+        ...
+
+    def clear(self) -> int:
+        """Remove all records from this store and return the number removed."""
+        ...
+
 
 class WorkingMemoryStore:
     """A lightweight in-process store for short-term memory.
@@ -44,19 +53,52 @@ class WorkingMemoryStore:
         half_life_seconds: float = 3600.0,
         recency_weight: float = 0.3,
         access_gain: float = 0.5,
+        persistence_path: str | None = None,
+        ttl_seconds: float | None = None,
+        max_records: int | None = None,
     ) -> None:
-        self.records: list[MemoryRecord] = []
+        self.persistence = (
+            JsonMemoryPersistence(persistence_path) if persistence_path else None
+        )
+        self.records: list[MemoryRecord] = (
+            self.persistence.load() if self.persistence is not None else []
+        )
         # 工作记忆偏短期，默认 1 小时半衰、近因占基础分 30%。
         self.half_life_seconds = half_life_seconds
         self.recency_weight = recency_weight
         # 访问强化上限增益：被反复命中的记忆最多获得 (1 + access_gain) 倍加成。
         self.access_gain = access_gain
+        # 可选自动维护策略：工作记忆可以像“短期缓存”一样按 TTL/容量自清理。
+        self.ttl_seconds = ttl_seconds
+        self.max_records = max_records
 
     def add(self, record: MemoryRecord) -> MemoryRecord:
         self.records.append(record)
+        self.prune()
+        self._persist()
         return record
 
+    def add_record(
+        self,
+        *,
+        content: str,
+        memory_type: str = "working",
+        importance: float = 0.5,
+        metadata: dict[str, Any] | None = None,
+    ) -> MemoryRecord:
+        """Convenience helper for tests and demos that do not need a Manager."""
+
+        return self.add(
+            MemoryRecord(
+                content=content,
+                memory_type=memory_type,
+                importance=importance,
+                metadata=metadata or {},
+            )
+        )
+
     def search(self, query: str, limit: int = 5) -> list[MemorySearchResult]:
+        self.prune()
         query_terms = self._tokenize(query)
         now = time()
         scored: list[MemorySearchResult] = []
@@ -85,9 +127,12 @@ class WorkingMemoryStore:
         # 检索即强化：本次返回的记忆被“想起”，下次更易被检索到。
         for item in top:
             item.record.reinforce(now)
+        if top:
+            self._persist()
         return top
 
     def summary(self, limit: int = 5) -> list[MemoryRecord]:
+        self.prune()
         # 重要性优先，其次新记忆优先，便于短期工作记忆保持“当前感”。
         return sorted(
             self.records,
@@ -102,8 +147,72 @@ class WorkingMemoryStore:
         for index, record in enumerate(self.records):
             if record.memory_id == memory_id:
                 del self.records[index]
+                self._persist()
                 return True
         return False
+
+    def update(self, memory_id: str, **changes: Any) -> MemoryRecord | None:
+        for record in self.records:
+            if record.memory_id != memory_id:
+                continue
+            self._apply_record_changes(record, changes)
+            self._persist()
+            return record
+        return None
+
+    def clear(self) -> int:
+        count = len(self.records)
+        self.records = []
+        self._persist()
+        return count
+
+    def prune(self, *, now: float | None = None) -> list[MemoryRecord]:
+        """Apply optional TTL/capacity rules and return removed records.
+
+        这一步让 working memory 更像真实短期记忆：过旧或超容量的信息会
+        自动被挤出，避免每次都依赖外部手动调用 forget。
+        """
+
+        current_time = now if now is not None else time()
+        victims: list[MemoryRecord] = []
+
+        if self.ttl_seconds is not None:
+            victims.extend(
+                record
+                for record in self.records
+                if (current_time - record.created_at) > self.ttl_seconds
+            )
+
+        kept = [record for record in self.records if record not in victims]
+        if self.max_records is not None and len(kept) > self.max_records:
+            ranked = sorted(
+                kept,
+                key=lambda item: (item.importance, item.access_count, item.created_at),
+                reverse=True,
+            )
+            keep_ids = {record.memory_id for record in ranked[: self.max_records]}
+            victims.extend(record for record in kept if record.memory_id not in keep_ids)
+
+        if victims:
+            victim_ids = {record.memory_id for record in victims}
+            self.records = [
+                record for record in self.records if record.memory_id not in victim_ids
+            ]
+            self._persist()
+        return victims
+
+    def _apply_record_changes(self, record: MemoryRecord, changes: dict[str, Any]) -> None:
+        if "content" in changes and changes["content"] is not None:
+            record.content = str(changes["content"]).strip()
+        if "importance" in changes and changes["importance"] is not None:
+            record.importance = float(changes["importance"])
+        metadata = changes.get("metadata")
+        if isinstance(metadata, dict):
+            record.metadata.update(metadata)
+
+    def _persist(self) -> None:
+        if self.persistence is not None:
+            self.persistence.save(self.records)
 
     def _tokenize(self, text: str) -> Counter[str]:
         """Tokenize Chinese-ish text without pulling in a heavy dependency.
@@ -155,6 +264,7 @@ class SemanticMemoryStore:
         half_life_seconds: float = 0.0,
         recency_weight: float = 0.0,
         access_gain: float = 0.5,
+        restore_existing: bool = True,
     ) -> None:
         self.embedder = embedder or self._build_default_embedder()
         self.vector_store = vector_store or self._build_default_vector_store(
@@ -168,6 +278,8 @@ class SemanticMemoryStore:
         # 进程内保留一份引用，方便 遗忘/整合 枚举候选 + 访问强化回查；
         # 向量库本身不擅长全量 scroll，也不适合频繁写访问计数。
         self.records: list[MemoryRecord] = []
+        if restore_existing:
+            self.records = self._load_existing_records()
 
     def add(self, record: MemoryRecord) -> MemoryRecord:
         vector = self._encode_one(record.content)
@@ -177,6 +289,8 @@ class SemanticMemoryStore:
             "memory_type": record.memory_type,
             "importance": record.importance,
             "created_at": record.created_at,
+            "access_count": record.access_count,
+            "last_accessed": record.last_accessed,
             **record.metadata,
         }
         ok = self.vector_store.add_vectors(
@@ -186,7 +300,7 @@ class SemanticMemoryStore:
         )
         if ok is False:
             raise RuntimeError("向量写入失败")
-        self.records.append(record)
+        self._upsert_local_record(record)
         return record
 
     def search(self, query: str, limit: int = 5) -> list[MemorySearchResult]:
@@ -244,11 +358,15 @@ class SemanticMemoryStore:
             )
         for item in results:
             item.record.reinforce(now)
+            self._persist_access(item.record)
         return results
 
     def summary(self, limit: int = 5) -> list[MemoryRecord]:
-        # Qdrant 更适合按 query 检索；第一版不做全量 scroll，保持接口明确。
-        return []
+        return sorted(
+            self.records,
+            key=lambda item: (item.importance, item.created_at),
+            reverse=True,
+        )[:limit]
 
     def all_records(self) -> list[MemoryRecord]:
         return list(self.records)
@@ -261,7 +379,9 @@ class SemanticMemoryStore:
                 found = True
                 break
         # 尽量把删除同步到向量库；不同后端方法名不一，缺失时静默跳过。
-        deleter = getattr(self.vector_store, "delete_vectors", None) or getattr(
+        deleter = getattr(self.vector_store, "delete_memories", None) or getattr(
+            self.vector_store, "delete_vectors", None
+        ) or getattr(
             self.vector_store, "delete", None
         )
         if deleter is not None:
@@ -272,6 +392,154 @@ class SemanticMemoryStore:
             except Exception:
                 pass
         return found
+
+    def update(self, memory_id: str, **changes: Any) -> MemoryRecord | None:
+        for record in self.records:
+            if record.memory_id != memory_id:
+                continue
+            self._apply_record_changes(record, changes)
+            # 语义记忆内容/重要性改变后，需要重新写入向量库，让后续检索用新文本。
+            self.add(record)
+            return record
+        return None
+
+    def clear(self) -> int:
+        memory_ids = [record.memory_id for record in self.records]
+        count = len(memory_ids)
+        for memory_id in memory_ids:
+            self.delete(memory_id)
+        return count
+
+    def _apply_record_changes(self, record: MemoryRecord, changes: dict[str, Any]) -> None:
+        if "content" in changes and changes["content"] is not None:
+            record.content = str(changes["content"]).strip()
+        if "importance" in changes and changes["importance"] is not None:
+            record.importance = float(changes["importance"])
+        metadata = changes.get("metadata")
+        if isinstance(metadata, dict):
+            record.metadata.update(metadata)
+
+    def _upsert_local_record(self, record: MemoryRecord) -> None:
+        for index, existing in enumerate(self.records):
+            if existing.memory_id == record.memory_id:
+                self.records[index] = record
+                return
+        self.records.append(record)
+
+    def _load_existing_records(self) -> list[MemoryRecord]:
+        """Best-effort restore from vector-store payloads when the backend supports it."""
+
+        loader = getattr(self.vector_store, "scroll", None)
+        if loader is None and hasattr(self.vector_store, "client"):
+            client = getattr(self.vector_store, "client")
+
+            def loader(limit: int = 10_000) -> list[dict[str, Any]]:
+                response = client.scroll(
+                    collection_name=self.vector_store.collection_name,
+                    limit=limit,
+                    with_payload=True,
+                    with_vectors=False,
+                )
+                points = response[0] if isinstance(response, tuple) else response
+                return [
+                    {
+                        "id": point.id,
+                        "metadata": point.payload or {},
+                    }
+                    for point in points
+                ]
+
+        if loader is None:
+            rows = getattr(self.vector_store, "rows", [])
+        else:
+            try:
+                rows = loader(limit=10_000)
+            except TypeError:
+                rows = loader()
+            except Exception:
+                rows = []
+
+        records: list[MemoryRecord] = []
+        seen: set[str] = set()
+        for row in rows or []:
+            meta = row.get("metadata", row.get("payload", row)) or {}
+            if meta.get("memory_type") != "semantic":
+                continue
+            record = self._record_from_metadata(meta, row.get("id"))
+            if record.memory_id not in seen:
+                records.append(record)
+                seen.add(record.memory_id)
+        return records
+
+    def _record_from_metadata(self, meta: dict[str, Any], fallback_id: Any = None) -> MemoryRecord:
+        data = {
+            "content": meta.get("content", ""),
+            "memory_type": meta.get("memory_type", "semantic"),
+            "importance": meta.get("importance", 0.5),
+            "metadata": {
+                key: value
+                for key, value in meta.items()
+                if key
+                not in {
+                    "content",
+                    "memory_type",
+                    "importance",
+                    "created_at",
+                    "memory_id",
+                    "access_count",
+                    "last_accessed",
+                }
+            },
+            "memory_id": meta.get("memory_id", fallback_id),
+            "created_at": meta.get("created_at", 0.0),
+            "access_count": meta.get("access_count", 0),
+            "last_accessed": meta.get("last_accessed", 0.0),
+        }
+        return record_from_dict(data)
+
+    def _persist_access(self, record: MemoryRecord) -> None:
+        """Best-effort access-state writeback for Qdrant-like stores."""
+
+        payload = {
+            "access_count": record.access_count,
+            "last_accessed": record.last_accessed,
+        }
+        updater = getattr(self.vector_store, "update_metadata", None)
+        if updater is not None:
+            try:
+                updater(record.memory_id, payload)
+                return
+            except Exception:
+                pass
+        # Fake stores in tests expose rows; updating them keeps behavior observable.
+        rows = getattr(self.vector_store, "rows", None)
+        if isinstance(rows, list):
+            for row in rows:
+                meta = row.get("metadata", {})
+                if meta.get("memory_id") == record.memory_id or row.get("id") == record.memory_id:
+                    meta.update(payload)
+        client = getattr(self.vector_store, "client", None)
+        if client is not None:
+            try:
+                from qdrant_client.http import models
+
+                client.set_payload(
+                    collection_name=self.vector_store.collection_name,
+                    payload=payload,
+                    points=models.FilterSelector(
+                        filter=models.Filter(
+                            must=[
+                                models.FieldCondition(
+                                    key="memory_id",
+                                    match=models.MatchValue(value=record.memory_id),
+                                )
+                            ]
+                        )
+                    ),
+                    wait=True,
+                )
+            except Exception:
+                pass
 
     def _encode_one(self, text: str) -> list[float]:
         encoded = self.embedder.encode([text])
@@ -318,6 +586,7 @@ class EpisodicMemoryStore:
         half_life_seconds: float = 86400.0,
         recency_weight: float = 0.4,
         access_gain: float = 0.5,
+        restore_existing: bool = True,
     ) -> None:
         self.user_id = user_id
         self.graph_store = graph_store or self._build_default_graph_store()
@@ -326,6 +595,8 @@ class EpisodicMemoryStore:
         self.half_life_seconds = half_life_seconds
         self.recency_weight = recency_weight
         self.access_gain = access_gain
+        if restore_existing:
+            self.records = self._load_existing_records()
 
     def add(self, record: MemoryRecord) -> MemoryRecord:
         user_entity_id = f"user:{self.user_id}"
@@ -336,6 +607,8 @@ class EpisodicMemoryStore:
             "memory_type": record.memory_type,
             "importance": record.importance,
             "created_at_ts": record.created_at,
+            "access_count": record.access_count,
+            "last_accessed": record.last_accessed,
             **record.metadata,
         }
 
@@ -363,7 +636,7 @@ class EpisodicMemoryStore:
                 "importance": record.importance,
             },
         )
-        self.records.append(record)
+        self._upsert_local_record(record)
         return record
 
     def search(self, query: str, limit: int = 5) -> list[MemorySearchResult]:
@@ -419,6 +692,7 @@ class EpisodicMemoryStore:
             top = results[:limit]
             for item in top:
                 item.record.reinforce(now)
+                self._persist_access(item.record)
             return top
 
         # 如果图存储只支持精确/正则搜索失败，当前进程内记录还能提供兜底。
@@ -462,6 +736,113 @@ class EpisodicMemoryStore:
                 pass
         return found
 
+    def update(self, memory_id: str, **changes: Any) -> MemoryRecord | None:
+        for record in self.records:
+            if record.memory_id != memory_id:
+                continue
+            self._apply_record_changes(record, changes)
+            self.add(record)
+            return record
+        return None
+
+    def clear(self) -> int:
+        memory_ids = [record.memory_id for record in self.records]
+        count = len(memory_ids)
+        for memory_id in memory_ids:
+            self.delete(memory_id)
+        return count
+
+    def _apply_record_changes(self, record: MemoryRecord, changes: dict[str, Any]) -> None:
+        if "content" in changes and changes["content"] is not None:
+            record.content = str(changes["content"]).strip()
+        if "importance" in changes and changes["importance"] is not None:
+            record.importance = float(changes["importance"])
+        metadata = changes.get("metadata")
+        if isinstance(metadata, dict):
+            record.metadata.update(metadata)
+
+    def _upsert_local_record(self, record: MemoryRecord) -> None:
+        for index, existing in enumerate(self.records):
+            if existing.memory_id == record.memory_id:
+                self.records[index] = record
+                return
+        self.records.append(record)
+
+    def _load_existing_records(self) -> list[MemoryRecord]:
+        loader = getattr(self.graph_store, "search_entities_by_name", None)
+        if loader is None:
+            return []
+        try:
+            rows = loader(name_pattern=".*", entity_types=["Episode"], limit=10_000)
+        except Exception:
+            return []
+        records: list[MemoryRecord] = []
+        seen: set[str] = set()
+        for row in rows:
+            memory_id = str(row.get("memory_id", row.get("id", ""))).replace("episode:", "")
+            if not memory_id or memory_id in seen:
+                continue
+            record = MemoryRecord(
+                content=str(row.get("content") or row.get("name") or ""),
+                memory_type=str(row.get("memory_type", "episodic")),
+                importance=float(row.get("importance", 0.5)),
+                metadata={
+                    key: value
+                    for key, value in row.items()
+                    if key
+                    not in {
+                        "content",
+                        "name",
+                        "memory_type",
+                        "importance",
+                        "memory_id",
+                        "created_at_ts",
+                        "access_count",
+                        "last_accessed",
+                    }
+                },
+                memory_id=memory_id,
+                created_at=float(row.get("created_at_ts", 0.0) or 0.0),
+                access_count=int(row.get("access_count", 0) or 0),
+                last_accessed=float(row.get("last_accessed", 0.0) or 0.0),
+            )
+            records.append(record)
+            seen.add(memory_id)
+        return records
+
+    def _persist_access(self, record: MemoryRecord) -> None:
+        payload = {
+            "access_count": record.access_count,
+            "last_accessed": record.last_accessed,
+        }
+        updater = getattr(self.graph_store, "update_entity", None)
+        if updater is not None:
+            try:
+                updater(entity_id=f"episode:{record.memory_id}", properties=payload)
+                return
+            except Exception:
+                pass
+        entities = getattr(self.graph_store, "entities", None)
+        if isinstance(entities, dict):
+            entity = entities.get(f"episode:{record.memory_id}")
+            if entity is not None:
+                entity.update(payload)
+        driver = getattr(self.graph_store, "driver", None)
+        if driver is not None:
+            try:
+                with driver.session(database=self.graph_store.database) as session:
+                    session.run(
+                        """
+                        MATCH (e:Entity {id: $entity_id})
+                        SET e.access_count = $access_count,
+                            e.last_accessed = $last_accessed
+                        """,
+                        entity_id=f"episode:{record.memory_id}",
+                        **payload,
+                    )
+            except Exception:
+                pass
+
     def _build_default_graph_store(self) -> Any:
         import os
 
@@ -489,8 +870,14 @@ class PerceptualMemoryStore:
         half_life_seconds: float = 86400.0,
         recency_weight: float = 0.2,
         access_gain: float = 0.5,
+        persistence_path: str | None = None,
     ) -> None:
-        self.records: list[MemoryRecord] = []
+        self.persistence = (
+            JsonMemoryPersistence(persistence_path) if persistence_path else None
+        )
+        self.records: list[MemoryRecord] = (
+            self.persistence.load() if self.persistence is not None else []
+        )
         # 复用工作记忆的分词与重叠打分；感知记忆默认 1 天半衰、近因占 20%。
         self._scorer = WorkingMemoryStore()
         self.half_life_seconds = half_life_seconds
@@ -499,6 +886,7 @@ class PerceptualMemoryStore:
 
     def add(self, record: MemoryRecord) -> MemoryRecord:
         self.records.append(record)
+        self._persist()
         return record
 
     def search(self, query: str, limit: int = 5) -> list[MemorySearchResult]:
@@ -540,6 +928,8 @@ class PerceptualMemoryStore:
         top = results[:limit]
         for item in top:
             item.record.reinforce(now)
+        if top:
+            self._persist()
         return top
 
     def summary(self, limit: int = 5) -> list[MemoryRecord]:
@@ -556,5 +946,79 @@ class PerceptualMemoryStore:
         for index, record in enumerate(self.records):
             if record.memory_id == memory_id:
                 del self.records[index]
+                self._persist()
                 return True
         return False
+
+    def update(self, memory_id: str, **changes: Any) -> MemoryRecord | None:
+        for record in self.records:
+            if record.memory_id != memory_id:
+                continue
+            if "content" in changes and changes["content"] is not None:
+                record.content = str(changes["content"]).strip()
+            if "importance" in changes and changes["importance"] is not None:
+                record.importance = float(changes["importance"])
+            metadata = changes.get("metadata")
+            if isinstance(metadata, dict):
+                record.metadata.update(metadata)
+            self._persist()
+            return record
+        return None
+
+    def clear(self) -> int:
+        count = len(self.records)
+        self.records = []
+        self._persist()
+        return count
+
+    def search_by_embedding(
+        self,
+        query_vector: list[float],
+        *,
+        modality: str | None = None,
+        limit: int = 5,
+    ) -> list[MemorySearchResult]:
+        """Search perceptual records by injected multimodal embeddings."""
+
+        now = time()
+        results: list[MemorySearchResult] = []
+        for record in self.records:
+            if modality and record.metadata.get("modality") != modality:
+                continue
+            vector = record.metadata.get("embedding")
+            if not isinstance(vector, list) or not vector:
+                continue
+            score = self._dot(query_vector, [float(item) for item in vector])
+            if score <= 0:
+                continue
+            results.append(
+                MemorySearchResult(
+                    record=record,
+                    score=combined_score(
+                        score,
+                        record.importance,
+                        created_at=record.created_at,
+                        now=now,
+                        half_life_seconds=self.half_life_seconds,
+                        recency_weight=self.recency_weight,
+                        access_count=record.access_count,
+                        access_gain=self.access_gain,
+                    ),
+                    source="perceptual_embedding",
+                )
+            )
+        results.sort(key=lambda item: item.score, reverse=True)
+        top = results[:limit]
+        for item in top:
+            item.record.reinforce(now)
+        if top:
+            self._persist()
+        return top
+
+    def _dot(self, left: list[float], right: list[float]) -> float:
+        length = min(len(left), len(right))
+        return sum(left[index] * right[index] for index in range(length))
+
+    def _persist(self) -> None:
+        if self.persistence is not None:
+            self.persistence.save(self.records)

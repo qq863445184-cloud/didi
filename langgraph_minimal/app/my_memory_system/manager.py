@@ -59,16 +59,34 @@ class MyMemoryManager:
         *,
         query: str,
         memory_type: str = "working",
+        memory_types: list[str] | None = None,
         limit: int = 5,
+        min_importance: float | None = None,
     ) -> list[MemorySearchResult]:
-        store = self._get_store(memory_type)
-        results = store.search(query, limit=limit)
+        target_types = self._resolve_memory_types(memory_type, memory_types)
+        results: list[MemorySearchResult] = []
+        # 每个 store 先取 limit 条，再在 Manager 层做全局排序和截断。
+        # 这样跨 working/semantic/episodic/perceptual 的结果可以统一竞争排名。
+        for target_type in target_types:
+            store = self._get_store(target_type)
+            store_results = store.search(query, limit=limit)
+            if min_importance is not None:
+                store_results = [
+                    item
+                    for item in store_results
+                    if item.record.importance >= min_importance
+                ]
+            results.extend(store_results)
+        results.sort(key=lambda item: item.score, reverse=True)
+        results = results[:limit]
         self.trace_events.append(
             {
                 "stage": "manager.search",
                 "memory_type": memory_type,
+                "memory_types": target_types,
                 "query": query,
                 "limit": limit,
+                "min_importance": min_importance,
                 "hits": len(results),
             }
         )
@@ -86,6 +104,82 @@ class MyMemoryManager:
             }
         )
         return records
+
+    def stats(self) -> dict[str, Any]:
+        """Return lightweight inventory data for every configured store."""
+
+        by_type = {
+            memory_type: len(store.all_records())
+            for memory_type, store in self.stores.items()
+        }
+        payload = {
+            "user_id": self.user_id,
+            "total": sum(by_type.values()),
+            "by_type": by_type,
+        }
+        self.trace_events.append(
+            {
+                "stage": "manager.stats",
+                "total": payload["total"],
+                "by_type": by_type,
+            }
+        )
+        return payload
+
+    def update(
+        self,
+        *,
+        memory_id: str,
+        memory_type: str = "working",
+        content: str | None = None,
+        importance: float | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> MemoryRecord:
+        store = self._get_store(memory_type)
+        updated = store.update(
+            memory_id,
+            content=content,
+            importance=importance,
+            metadata=metadata or {},
+        )
+        if updated is None:
+            raise ValueError(f"找不到 memory_id={memory_id}")
+        self.trace_events.append(
+            {
+                "stage": "manager.update",
+                "memory_type": memory_type,
+                "memory_id": memory_id,
+            }
+        )
+        return updated
+
+    def remove(self, *, memory_id: str, memory_type: str = "working") -> bool:
+        store = self._get_store(memory_type)
+        removed = store.delete(memory_id)
+        self.trace_events.append(
+            {
+                "stage": "manager.remove",
+                "memory_type": memory_type,
+                "memory_id": memory_id,
+                "removed": removed,
+            }
+        )
+        return removed
+
+    def clear_all(self, *, memory_type: str = "all") -> dict[str, int]:
+        target_types = self._resolve_memory_types(memory_type, None)
+        removed_by_type = {
+            target_type: self._get_store(target_type).clear()
+            for target_type in target_types
+        }
+        self.trace_events.append(
+            {
+                "stage": "manager.clear_all",
+                "memory_type": memory_type,
+                "removed_by_type": removed_by_type,
+            }
+        )
+        return removed_by_type
 
     def forget(
         self,
@@ -201,3 +295,23 @@ class MyMemoryManager:
             supported = ", ".join(sorted(self.stores))
             raise ValueError(f"暂不支持 memory_type={memory_type}，当前支持: {supported}")
         return self.stores[memory_type]
+
+    def _resolve_memory_types(
+        self,
+        memory_type: str,
+        memory_types: list[str] | None,
+    ) -> list[str]:
+        if memory_types:
+            targets = memory_types
+        elif memory_type == "all":
+            targets = list(self.stores)
+        else:
+            targets = [memory_type]
+
+        missing = [target for target in targets if target not in self.stores]
+        if missing:
+            supported = ", ".join(sorted(self.stores))
+            raise ValueError(
+                f"暂不支持 memory_type={', '.join(missing)}，当前支持: {supported}"
+            )
+        return targets

@@ -63,7 +63,7 @@ class MyPerceptionTool(Tool):
             ToolParameter(
                 name="action",
                 type="string",
-                description="操作类型：ingest_file、search、summary",
+                description="操作类型：ingest_file、search、search_file、summary",
                 required=True,
             ),
             ToolParameter(
@@ -108,9 +108,9 @@ class MyPerceptionTool(Tool):
 
     def validate_parameters(self, parameters: dict[str, Any]) -> bool:
         action = parameters.get("action")
-        if action not in {"ingest_file", "search", "summary"}:
+        if action not in {"ingest_file", "search", "search_file", "summary"}:
             return False
-        if action == "ingest_file":
+        if action in {"ingest_file", "search_file"}:
             return bool(str(parameters.get("file_path", "")).strip())
         if action == "search":
             return bool(str(parameters.get("query", "")).strip())
@@ -128,6 +128,8 @@ class MyPerceptionTool(Tool):
                 result = self._ingest_file(parameters)
             elif action == "search":
                 result = self._search(parameters)
+            elif action == "search_file":
+                result = self._search_file(parameters)
             else:
                 result = self._summary(parameters)
             self.trace_events.extend(self._call_trace)
@@ -217,6 +219,55 @@ class MyPerceptionTool(Tool):
             return "No perceptual memories found."
 
         lines = [f"Found {len(results)} perceptual memories:"]
+        for index, item in enumerate(results, 1):
+            meta = item.record.metadata
+            lines.append(
+                f"{index}. score={item.score:.2f} modality={meta.get('modality', '')} "
+                f"file={meta.get('file_path', '')} content={item.record.content}"
+            )
+        return "\n".join(lines)
+
+    def _search_file(self, parameters: dict[str, Any]) -> str:
+        file_path = Path(str(parameters["file_path"])).expanduser()
+        if not file_path.exists():
+            return f"Error: file does not exist: {file_path}"
+
+        modality = str(parameters.get("modality") or self._detect_modality(file_path))
+        embedding_meta = self._encode_file(file_path, modality)
+        if not embedding_meta.get("embedding"):
+            return f"Error: no encoder is configured for modality={modality}"
+
+        self._call_trace.append(
+            {
+                "stage": "perception.encode_query",
+                "file_path": str(file_path),
+                "modality": modality,
+                "embedding_dim": embedding_meta["embedding_dim"],
+            }
+        )
+
+        store = self.manager.stores.get("perceptual")
+        searcher = getattr(store, "search_by_embedding", None)
+        if searcher is None:
+            return "Error: perceptual store does not support embedding search"
+
+        results = searcher(
+            embedding_meta["embedding"],
+            modality=modality,
+            limit=int(parameters.get("limit", 5)),
+        )
+        self._call_trace.append(
+            {
+                "stage": "perception.search_embedding",
+                "file_path": str(file_path),
+                "modality": modality,
+                "hits": len(results),
+            }
+        )
+        if not results:
+            return "No perceptual memories found by file embedding."
+
+        lines = [f"Found {len(results)} perceptual memories by file embedding:"]
         for index, item in enumerate(results, 1):
             meta = item.record.metadata
             lines.append(
