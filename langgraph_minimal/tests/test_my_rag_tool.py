@@ -208,6 +208,48 @@ def test_my_rag_tool_adds_markdown_document(tmp_path):
     assert tool.trace_events[0]["stage"] == "rag.add_document"
 
 
+def test_my_rag_tool_keeps_section_metadata_when_chunking_markdown():
+    tool = build_tool()
+
+    tool.run(
+        {
+            "action": "add_text",
+            "text": "# 记忆系统\n\n工作记忆保存当前任务上下文。\n\n## RAG 检索\n\nRAG 检索负责从知识库召回相关片段。",
+            "document_id": "memory_doc",
+            "namespace": "chapter8",
+            "chunk_size": 32,
+            "chunk_overlap": 4,
+        }
+    )
+
+    rows = tool.vector_store.rows
+    assert len(rows) >= 2
+    assert any(row["metadata"]["section_title"] == "记忆系统" for row in rows)
+    assert any(row["metadata"]["section_title"] == "RAG 检索" for row in rows)
+    assert all(row["metadata"]["start_char"] is not None for row in rows)
+    assert all(row["metadata"]["end_char"] is not None for row in rows)
+
+
+def test_my_rag_tool_splits_long_semantic_unit_with_overlap():
+    tool = build_tool()
+    long_text = "LangGraph" + "审批流程" * 20
+
+    tool.run(
+        {
+            "action": "add_text",
+            "text": long_text,
+            "document_id": "long_doc",
+            "namespace": "chapter8",
+            "chunk_size": 24,
+            "chunk_overlap": 6,
+        }
+    )
+
+    rows = tool.vector_store.rows
+    assert len(rows) > 1
+    assert rows[1]["metadata"]["start_char"] < rows[0]["metadata"]["end_char"]
+
+
 def test_my_rag_tool_rejects_missing_document():
     tool = build_tool()
 

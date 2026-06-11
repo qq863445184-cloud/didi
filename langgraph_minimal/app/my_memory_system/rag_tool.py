@@ -99,15 +99,19 @@ class MyRAGTool(Tool):
         chunk_size = int(parameters.get("chunk_size", 800))
         chunk_overlap = int(parameters.get("chunk_overlap", 100))
 
-        chunks = self._chunk_text(text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
-        vectors = self._encode_many(chunks)
+        chunks = self._build_chunks(text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+        chunk_texts = [chunk["content"] for chunk in chunks]
+        vectors = self._encode_many(chunk_texts)
         ids = [str(uuid4()) for _ in chunks]
         metadata = [
             {
-                "content": chunk,
+                "content": chunk["content"],
                 "document_id": document_id,
                 "namespace": namespace,
                 "chunk_index": index,
+                "section_title": chunk.get("section_title"),
+                "start_char": chunk.get("start_char"),
+                "end_char": chunk.get("end_char"),
                 "memory_type": "rag_chunk",
                 "data_source": "my_rag_tool",
                 "created_at": time(),
@@ -437,19 +441,201 @@ class MyRAGTool(Tool):
         return bool(value)
 
     def _chunk_text(self, text: str, *, chunk_size: int, chunk_overlap: int) -> list[str]:
+        return [
+            chunk["content"]
+            for chunk in self._build_chunks(
+                text,
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+            )
+        ]
+
+    def _build_chunks(
+        self,
+        text: str,
+        *,
+        chunk_size: int,
+        chunk_overlap: int,
+    ) -> list[dict[str, Any]]:
         chunk_size = max(1, chunk_size)
         chunk_overlap = max(0, min(chunk_overlap, chunk_size - 1))
-        chunks: list[str] = []
+        units = self._split_semantic_units(text)
+        if not units:
+            return []
+
+        chunks: list[dict[str, Any]] = []
+        current_parts: list[str] = []
+        current_start: int | None = None
+        current_end = 0
+        current_section: str | None = None
+
+        for unit in units:
+            content = str(unit["content"]).strip()
+            if not content:
+                continue
+            if len(content) > chunk_size:
+                if current_parts:
+                    chunks.append(
+                        self._make_chunk(
+                            current_parts,
+                            start_char=current_start or 0,
+                            end_char=current_end,
+                            section_title=current_section,
+                        )
+                    )
+                    current_parts = []
+                    current_start = None
+                chunks.extend(
+                    self._split_long_unit(
+                        content,
+                        start_char=int(unit["start_char"]),
+                        section_title=unit.get("section_title"),
+                        chunk_size=chunk_size,
+                        chunk_overlap=chunk_overlap,
+                    )
+                )
+                current_end = int(unit["end_char"])
+                current_section = unit.get("section_title")
+                continue
+
+            joined = "\n\n".join([*current_parts, content]) if current_parts else content
+            if current_parts and len(joined) > chunk_size:
+                chunks.append(
+                    self._make_chunk(
+                        current_parts,
+                        start_char=current_start or 0,
+                        end_char=current_end,
+                        section_title=current_section,
+                    )
+                )
+                # 语义单元之间的 overlap 很难按 token 精确复用；这里保留上一块尾部
+                # 文本作为上下文提示，同时不改变真实 start/end 元数据的粗粒度含义。
+                overlap_text = self._tail_overlap(chunks[-1]["content"], chunk_overlap)
+                current_parts = [overlap_text, content] if overlap_text else [content]
+                current_start = int(unit["start_char"])
+            else:
+                current_parts.append(content)
+                if current_start is None:
+                    current_start = int(unit["start_char"])
+            current_end = int(unit["end_char"])
+            current_section = unit.get("section_title") or current_section
+
+        if current_parts:
+            chunks.append(
+                self._make_chunk(
+                    current_parts,
+                    start_char=current_start or 0,
+                    end_char=current_end,
+                    section_title=current_section,
+                )
+            )
+        return chunks
+
+    def _split_semantic_units(self, text: str) -> list[dict[str, Any]]:
+        """Split text into heading/paragraph aware units before vectorization."""
+
+        units: list[dict[str, Any]] = []
+        current_section: str | None = None
+        position = 0
+        for block in self._iter_text_blocks(text):
+            content = block["content"]
+            stripped = content.strip()
+            if stripped.startswith("#"):
+                current_section = stripped.lstrip("#").strip() or current_section
+            units.append(
+                {
+                    "content": stripped,
+                    "start_char": block["start_char"],
+                    "end_char": block["end_char"],
+                    "section_title": current_section,
+                }
+            )
+            position = int(block["end_char"])
+        if units:
+            return units
+
+        stripped = text.strip()
+        return (
+            [
+                {
+                    "content": stripped,
+                    "start_char": 0,
+                    "end_char": len(text),
+                    "section_title": None,
+                }
+            ]
+            if stripped
+            else []
+        )
+
+    def _iter_text_blocks(self, text: str) -> list[dict[str, Any]]:
+        blocks: list[dict[str, Any]] = []
+        cursor = 0
+        for raw_block in text.split("\n\n"):
+            start = cursor
+            end = start + len(raw_block)
+            cursor = end + 2
+            stripped = raw_block.strip()
+            if not stripped:
+                continue
+            leading = len(raw_block) - len(raw_block.lstrip())
+            trailing = len(raw_block.rstrip())
+            blocks.append(
+                {
+                    "content": stripped,
+                    "start_char": start + leading,
+                    "end_char": start + trailing,
+                }
+            )
+        return blocks
+
+    def _split_long_unit(
+        self,
+        content: str,
+        *,
+        start_char: int,
+        section_title: str | None,
+        chunk_size: int,
+        chunk_overlap: int,
+    ) -> list[dict[str, Any]]:
+        chunks: list[dict[str, Any]] = []
         start = 0
-        while start < len(text):
-            end = min(len(text), start + chunk_size)
-            chunk = text[start:end].strip()
+        while start < len(content):
+            end = min(len(content), start + chunk_size)
+            chunk = content[start:end].strip()
             if chunk:
-                chunks.append(chunk)
-            if end >= len(text):
+                chunks.append(
+                    {
+                        "content": chunk,
+                        "start_char": start_char + start,
+                        "end_char": start_char + end,
+                        "section_title": section_title,
+                    }
+                )
+            if end >= len(content):
                 break
             start = end - chunk_overlap
         return chunks
+
+    def _make_chunk(
+        self,
+        parts: list[str],
+        *,
+        start_char: int,
+        end_char: int,
+        section_title: str | None,
+    ) -> dict[str, Any]:
+        return {
+            "content": "\n\n".join(part for part in parts if part).strip(),
+            "start_char": start_char,
+            "end_char": end_char,
+            "section_title": section_title,
+        }
+
+    def _tail_overlap(self, text: str, chunk_overlap: int) -> str:
+        if chunk_overlap <= 0:
+            return ""
+        return text[-chunk_overlap:].strip()
 
     def _load_document_text(self, file_path: Path) -> tuple[str, str]:
         suffix = file_path.suffix.lower()
