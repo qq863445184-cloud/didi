@@ -8,6 +8,7 @@ from .document_learning_ui import DocumentLearningUI, build_gradio_app
 from .entity_extraction import SpacyEntityExtractor
 from .models import MemoryRecord, MemorySearchResult
 from .perception_tool import MyPerceptionTool
+from .pdf_learning_assistant import PDFLearningAssistant
 from .rag_tool import MyRAGTool
 from .rag_qa_demo import RAGQADemo, RAGQAResult
 from .scoring import access_factor, combined_score, importance_factor, recency_factor
@@ -26,6 +27,7 @@ __all__ = [
     "MyMemoryTool",
     "MyPerceptionTool",
     "MyRAGTool",
+    "PDFLearningAssistant",
     "RAGQADemo",
     "RAGQAResult",
     "PerceptualMemoryStore",
