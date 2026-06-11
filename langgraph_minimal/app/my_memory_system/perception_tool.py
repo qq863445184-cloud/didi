@@ -63,8 +63,14 @@ class MyPerceptionTool(Tool):
             ToolParameter(
                 name="action",
                 type="string",
-                description="操作类型：ingest_file、search、search_file、summary",
+                description="操作类型：ingest_file、ingest_directory、search、search_file、summary",
                 required=True,
+            ),
+            ToolParameter(
+                name="directory_path",
+                type="string",
+                description="要批量写入感知记忆的目录路径，action=ingest_directory 时使用",
+                required=False,
             ),
             ToolParameter(
                 name="file_path",
@@ -108,10 +114,12 @@ class MyPerceptionTool(Tool):
 
     def validate_parameters(self, parameters: dict[str, Any]) -> bool:
         action = parameters.get("action")
-        if action not in {"ingest_file", "search", "search_file", "summary"}:
+        if action not in {"ingest_file", "ingest_directory", "search", "search_file", "summary"}:
             return False
         if action in {"ingest_file", "search_file"}:
             return bool(str(parameters.get("file_path", "")).strip())
+        if action == "ingest_directory":
+            return bool(str(parameters.get("directory_path", "")).strip())
         if action == "search":
             return bool(str(parameters.get("query", "")).strip())
         return True
@@ -126,6 +134,8 @@ class MyPerceptionTool(Tool):
         try:
             if action == "ingest_file":
                 result = self._ingest_file(parameters)
+            elif action == "ingest_directory":
+                result = self._ingest_directory(parameters)
             elif action == "search":
                 result = self._search(parameters)
             elif action == "search_file":
@@ -207,6 +217,55 @@ class MyPerceptionTool(Tool):
             lines.append(f"- extracted_text: {preview}")
         if embedding_meta:
             lines.append(f"- embedding_dim: {embedding_meta['embedding_dim']}")
+        return "\n".join(lines)
+
+    def _ingest_directory(self, parameters: dict[str, Any]) -> str:
+        directory_path = Path(str(parameters["directory_path"])).expanduser()
+        if not directory_path.exists():
+            return f"Error: directory does not exist: {directory_path}"
+        if not directory_path.is_dir():
+            return f"Error: path is not a directory: {directory_path}"
+
+        files = sorted(path for path in directory_path.iterdir() if path.is_file())
+        skipped = len([path for path in directory_path.iterdir() if not path.is_file()])
+        ingested = 0
+        failed: list[str] = []
+
+        for file_path in files:
+            # 批量入口复用单文件入口，保证模态检测、OCR/ASR、embedding 和 manager.add
+            # 的行为完全一致；这里只负责目录级编排和汇总。
+            result = self._ingest_file(
+                {
+                    **parameters,
+                    "action": "ingest_file",
+                    "file_path": str(file_path),
+                }
+            )
+            if result.startswith("Error:"):
+                failed.append(f"{file_path.name}: {result}")
+            else:
+                ingested += 1
+
+        self._call_trace.append(
+            {
+                "stage": "perception.ingest_directory",
+                "directory_path": str(directory_path),
+                "files": len(files),
+                "ingested": ingested,
+                "skipped": skipped,
+                "failed": len(failed),
+            }
+        )
+
+        lines = [
+            "Directory perceptual ingest finished:",
+            f"- directory: {directory_path}",
+            f"- files: {len(files)}",
+            f"- ingested: {ingested}",
+            f"- skipped: {skipped}",
+            f"- failed: {len(failed)}",
+        ]
+        lines.extend(f"- {item}" for item in failed)
         return "\n".join(lines)
 
     def _search(self, parameters: dict[str, Any]) -> str:

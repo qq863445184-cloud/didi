@@ -175,6 +175,43 @@ def test_perception_tool_searches_similar_file_by_modality_embedding(tmp_path):
     assert tool.trace_events[-1]["stage"] == "perception.search_embedding"
 
 
+def test_perception_tool_ingests_directory_of_multimodal_files(tmp_path):
+    note = tmp_path / "agent_note.md"
+    image = tmp_path / "architecture.png"
+    audio = tmp_path / "meeting.wav"
+    nested_dir = tmp_path / "nested"
+    nested_dir.mkdir()
+    note.write_text("第八章讨论 Agent 记忆、RAG 检索和知识库问答。", encoding="utf-8")
+    image.write_bytes(b"fake image")
+    audio.write_bytes(b"fake wav")
+    manager = MyMemoryManager(
+        user_id="perception_user",
+        stores={"perceptual": PerceptualMemoryStore()},
+    )
+    tool = MyPerceptionTool(
+        manager=manager,
+        image_ocr=lambda path: "架构图展示 Qdrant 和 Neo4j 的连接关系",
+        audio_asr=lambda path: "会议提到感知记忆需要支持 OCR 和 ASR",
+    )
+
+    result = tool.run(
+        {
+            "action": "ingest_directory",
+            "directory_path": str(tmp_path),
+            "description": "第八章多模态资料目录",
+            "importance": 0.75,
+        }
+    )
+    search_result = tool.run({"action": "search", "query": "OCR ASR Qdrant Neo4j"})
+
+    assert "Directory perceptual ingest finished" in result
+    assert "- ingested: 3" in result
+    assert "- skipped: 1" in result
+    assert len(manager.stores["perceptual"].records) == 3
+    assert "Found 2 perceptual memories" in search_result
+    assert any(event["stage"] == "perception.ingest_directory" for event in tool.trace_events)
+
+
 def test_perception_tool_returns_clear_error_for_missing_file(tmp_path):
     tool = MyPerceptionTool()
 
