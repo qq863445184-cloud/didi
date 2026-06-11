@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from time import time
 from typing import Any
 from uuid import uuid4
@@ -41,8 +42,9 @@ class MyRAGTool(Tool):
 
     def get_parameters(self) -> list[ToolParameter]:
         return [
-            ToolParameter(name="action", type="string", description="操作：add_text、search、ask、stats", required=True),
+            ToolParameter(name="action", type="string", description="操作：add_text、add_document、search、ask、stats", required=True),
             ToolParameter(name="text", type="string", description="要加入知识库的文本", required=False),
+            ToolParameter(name="file_path", type="string", description="要加入知识库的文档路径", required=False),
             ToolParameter(name="document_id", type="string", description="文档 ID", required=False),
             ToolParameter(name="query", type="string", description="检索 query", required=False),
             ToolParameter(name="question", type="string", description="问答问题", required=False),
@@ -56,6 +58,8 @@ class MyRAGTool(Tool):
         action = parameters.get("action")
         if action == "add_text":
             return bool(str(parameters.get("text", "")).strip())
+        if action == "add_document":
+            return bool(str(parameters.get("file_path", "")).strip())
         if action == "search":
             return bool(str(parameters.get("query") or parameters.get("question") or "").strip())
         if action == "ask":
@@ -72,6 +76,8 @@ class MyRAGTool(Tool):
         try:
             if action == "add_text":
                 return self._add_text(parameters)
+            if action == "add_document":
+                return self._add_document(parameters)
             if action == "search":
                 return self._search(parameters)
             if action == "ask":
@@ -118,6 +124,37 @@ class MyRAGTool(Tool):
             }
         )
         return f"文本已添加到知识库: {document_id}\n分块数量: {len(chunks)}\n命名空间: {namespace}"
+
+    def _add_document(self, parameters: dict[str, Any]) -> str:
+        file_path = Path(str(parameters["file_path"])).expanduser()
+        if not file_path.exists():
+            raise FileNotFoundError(f"文件不存在: {file_path}")
+        if not file_path.is_file():
+            raise ValueError(f"不是文件: {file_path}")
+
+        text, parser = self._load_document_text(file_path)
+        if not text.strip():
+            raise ValueError(f"文档没有提取出可索引文本: {file_path}")
+
+        # 文件入口最终复用 add_text 的切块与向量写入逻辑，避免两套入库路径分叉。
+        delegated = {
+            **parameters,
+            "action": "add_text",
+            "text": text,
+            "document_id": str(parameters.get("document_id") or file_path.name),
+        }
+        result = self._add_text(delegated)
+        self.trace_events[-1] = {
+            **self.trace_events[-1],
+            "stage": "rag.add_document",
+            "file_path": str(file_path),
+            "parser": parser,
+        }
+        return (
+            f"文档已添加到知识库: {file_path.name}\n"
+            f"解析器: {parser}\n"
+            f"{result}"
+        )
 
     def _search(self, parameters: dict[str, Any]) -> str:
         query = str(parameters.get("query") or parameters.get("question")).strip()
@@ -234,6 +271,24 @@ class MyRAGTool(Tool):
                 break
             start = end - chunk_overlap
         return chunks
+
+    def _load_document_text(self, file_path: Path) -> tuple[str, str]:
+        suffix = file_path.suffix.lower()
+        if suffix in {".txt", ".md", ".markdown", ".json", ".csv", ".log", ".py"}:
+            return file_path.read_text(encoding="utf-8"), "plain_text"
+
+        # 第八章文档管线通常会用 MarkItDown/Unstructured 这类解析器。
+        # 这里把 MarkItDown 做成可选能力：安装了就解析 PDF/Office，没安装就给出清晰提示。
+        try:
+            from markitdown import MarkItDown
+        except Exception as exc:
+            raise RuntimeError(
+                f"当前文件类型 {suffix or '<无后缀>'} 需要安装 markitdown 后才能解析"
+            ) from exc
+
+        converted = MarkItDown().convert(str(file_path))
+        text = getattr(converted, "text_content", None) or str(converted)
+        return text, "markitdown"
 
     def _encode_many(self, texts: list[str]) -> list[list[float]]:
         encoded = self.embedder.encode(texts)

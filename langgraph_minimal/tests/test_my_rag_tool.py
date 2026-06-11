@@ -138,3 +138,44 @@ def test_my_rag_tool_filters_by_namespace():
 
     assert "doc_b" in result
     assert "doc_a" not in result
+
+
+def test_my_rag_tool_adds_markdown_document(tmp_path):
+    tool = build_tool()
+    doc_path = tmp_path / "chapter8.md"
+    doc_path.write_text(
+        "# LangGraph\n\nLangGraph 使用图结构表达审批流程，适合金融风控系统。",
+        encoding="utf-8",
+    )
+
+    add_result = tool.run(
+        {
+            "action": "add_document",
+            "file_path": str(doc_path),
+            "namespace": "chapter8",
+            "chunk_size": 24,
+            "chunk_overlap": 4,
+        }
+    )
+    search_result = tool.run(
+        {
+            "action": "search",
+            "query": "金融风控 图结构",
+            "namespace": "chapter8",
+        }
+    )
+
+    assert "文档已添加到知识库" in add_result
+    assert "chapter8.md" in add_result
+    assert "搜索结果" in search_result
+    assert "金融风控" in search_result
+    assert tool.trace_events[0]["stage"] == "rag.add_document"
+
+
+def test_my_rag_tool_rejects_missing_document():
+    tool = build_tool()
+
+    result = tool.run({"action": "add_document", "file_path": "missing.md"})
+
+    assert "错误" in result
+    assert "文件不存在" in result
