@@ -6,6 +6,7 @@ from time import time
 from typing import Any, Protocol
 
 from .models import MemoryRecord, MemorySearchResult
+from .entity_extraction import SpacyEntityExtractor, normalize_entity_id
 from .persistence import JsonMemoryPersistence, record_from_dict, record_to_dict
 from .scoring import combined_score
 
@@ -259,6 +260,9 @@ class SemanticMemoryStore:
         *,
         embedder: Any | None = None,
         vector_store: Any | None = None,
+        graph_store: Any | None = None,
+        entity_extractor: Any | None = None,
+        enable_graph_index: bool = True,
         collection_name: str = "my_semantic_memory",
         vector_size: int = 384,
         half_life_seconds: float = 0.0,
@@ -271,6 +275,13 @@ class SemanticMemoryStore:
             collection_name=collection_name,
             vector_size=vector_size,
         )
+        self.graph_store = graph_store
+        self.entity_extractor = (
+            entity_extractor
+            if entity_extractor is not None
+            else SpacyEntityExtractor()
+        )
+        self.enable_graph_index = enable_graph_index
         # 语义记忆是长期、稳定的抽象知识，默认不做时间衰减，只叠加重要性因子。
         self.half_life_seconds = half_life_seconds
         self.recency_weight = recency_weight
@@ -282,6 +293,9 @@ class SemanticMemoryStore:
             self.records = self._load_existing_records()
 
     def add(self, record: MemoryRecord) -> MemoryRecord:
+        entities = self._extract_entities(record)
+        if entities:
+            record.metadata["entities"] = entities
         vector = self._encode_one(record.content)
         metadata = {
             "memory_id": record.memory_id,
@@ -300,6 +314,7 @@ class SemanticMemoryStore:
         )
         if ok is False:
             raise RuntimeError("向量写入失败")
+        self._index_semantic_graph(record, entities)
         self._upsert_local_record(record)
         return record
 
@@ -418,6 +433,63 @@ class SemanticMemoryStore:
         metadata = changes.get("metadata")
         if isinstance(metadata, dict):
             record.metadata.update(metadata)
+
+    def _extract_entities(self, record: MemoryRecord) -> list[dict[str, Any]]:
+        if not self.enable_graph_index or self.entity_extractor is None:
+            return []
+        try:
+            raw_entities = self.entity_extractor.extract(record.content)
+        except Exception:
+            return []
+
+        entities: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        for item in raw_entities or []:
+            name = str(item.get("name", "")).strip()
+            entity_type = str(item.get("type", "Entity")).strip() or "Entity"
+            if not name:
+                continue
+            key = (name, entity_type)
+            if key in seen:
+                continue
+            entities.append({"name": name, "type": entity_type})
+            seen.add(key)
+        return entities
+
+    def _index_semantic_graph(
+        self,
+        record: MemoryRecord,
+        entities: list[dict[str, Any]],
+    ) -> None:
+        if not self.enable_graph_index or self.graph_store is None or not entities:
+            return
+
+        memory_entity_id = f"semantic:{record.memory_id}"
+        self.graph_store.add_entity(
+            entity_id=memory_entity_id,
+            name=record.content[:80],
+            entity_type="SemanticMemory",
+            properties={
+                "memory_id": record.memory_id,
+                "content": record.content,
+                "importance": record.importance,
+                "created_at_ts": record.created_at,
+            },
+        )
+        for entity in entities:
+            entity_id = normalize_entity_id(entity["name"], entity["type"])
+            self.graph_store.add_entity(
+                entity_id=entity_id,
+                name=entity["name"],
+                entity_type=entity["type"],
+                properties={"source": "semantic_memory"},
+            )
+            self.graph_store.add_relationship(
+                from_entity_id=memory_entity_id,
+                to_entity_id=entity_id,
+                relationship_type="MENTIONS",
+                properties={"memory_id": record.memory_id},
+            )
 
     def _upsert_local_record(self, record: MemoryRecord) -> None:
         for index, existing in enumerate(self.records):

@@ -1,4 +1,5 @@
 from .manager import MyMemoryManager
+from .entity_extraction import SpacyEntityExtractor
 from .models import MemoryRecord, MemorySearchResult
 from .perception_tool import MyPerceptionTool
 from .rag_tool import MyRAGTool
@@ -16,6 +17,7 @@ __all__ = [
     "MyRAGTool",
     "PerceptualMemoryStore",
     "SemanticMemoryStore",
+    "SpacyEntityExtractor",
     "WorkingMemoryStore",
     "combined_score",
     "importance_factor",
