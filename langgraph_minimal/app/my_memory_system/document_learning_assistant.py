@@ -7,6 +7,7 @@ from typing import Any
 from .manager import MyMemoryManager
 from .rag_qa_demo import RAGQAResult
 from .rag_tool import MyRAGTool
+from .stores import PerceptualMemoryStore, WorkingMemoryStore
 
 
 @dataclass
@@ -48,9 +49,10 @@ class DocumentLearningAssistant:
         session_id: str = "default_session",
     ) -> None:
         self.rag_tool = rag_tool or MyRAGTool()
-        self.memory_manager = memory_manager or MyMemoryManager(user_id="learner")
+        self.memory_manager = memory_manager or self._build_default_memory_manager()
         self.namespace = namespace
         self.session_id = session_id
+        self._learning_events: list[dict[str, Any]] = []
         self.trace_events: list[dict[str, Any]] = []
 
     def load_document(
@@ -178,6 +180,11 @@ class DocumentLearningAssistant:
             limit=limit,
             session_id=self.session_id,
         )
+        semantic_records = self.memory_manager.summary(
+            memory_type="semantic",
+            limit=limit,
+            session_id=self.session_id,
+        )
 
         lines = ["学习报告", "一、学习事件"]
         if episodic_records:
@@ -191,22 +198,117 @@ class DocumentLearningAssistant:
         else:
             lines.append("- 暂无当前关注点")
 
+        lines.append("三、学习笔记")
+        if semantic_records:
+            lines.extend(f"- {record.content}" for record in semantic_records)
+        else:
+            lines.append("- 暂无学习笔记")
+
         self._append_trace(
             {
                 "stage": "learning.report",
                 "episodic_count": len(episodic_records),
                 "working_count": len(working_records),
+                "semantic_count": len(semantic_records),
             }
         )
         return "\n".join(lines)
 
+    def add_note(self, note: str, *, importance: float = 0.7) -> str:
+        """Save a learner's distilled note into semantic memory."""
+
+        normalized_note = note.strip()
+        semantic_record = self.memory_manager.add(
+            content=normalized_note,
+            memory_type="semantic",
+            importance=importance,
+            metadata={"session_id": self.session_id, "event_type": "learning_note"},
+        )
+        # 同步写一条工作记忆，让当前会话能立刻围绕这条笔记继续追问。
+        self.memory_manager.add(
+            content=f"刚添加学习笔记：{normalized_note}",
+            memory_type="working",
+            importance=min(1.0, importance),
+            metadata={
+                "session_id": self.session_id,
+                "event_type": "current_note",
+                "semantic_memory_id": semantic_record.memory_id,
+            },
+        )
+        self._append_trace(
+            {
+                "stage": "learning.add_note",
+                "memory_id": semantic_record.memory_id,
+                "importance": importance,
+            }
+        )
+        return f"已保存学习笔记：{normalized_note}"
+
+    def recall(
+        self,
+        query: str,
+        *,
+        memory_types: list[str] | None = None,
+        limit: int = 5,
+    ) -> str:
+        """Recall notes and recent learning context from memory."""
+
+        results = self.memory_manager.search(
+            query=query.strip(),
+            memory_type="all",
+            memory_types=memory_types,
+            limit=limit,
+            session_id=self.session_id,
+        )
+        self._append_trace(
+            {
+                "stage": "learning.recall",
+                "query": query,
+                "hits": len(results),
+                "memory_types": memory_types or "all",
+            }
+        )
+        if not results:
+            return "未找到相关学习记忆。"
+        return self._format_memory_context(results)
+
+    def get_stats(self) -> dict[str, Any]:
+        """Expose store inventory for the learning assistant."""
+
+        stats = self.memory_manager.stats()
+        self._append_trace({"stage": "learning.stats", "total": stats["total"]})
+        return stats
+
+    def generate_report(self, *, limit: int = 10) -> str:
+        """Alias matching the chapter 8 example naming."""
+
+        return self.learning_report(limit=limit)
+
     def _append_trace(self, event: dict[str, Any]) -> None:
+        self._learning_events.append(event)
         # 每次对外返回 trace 时，把 RAG 与 Memory 的最新事件合并，方便调试认知闭环。
         self.trace_events = [
             *self.rag_tool.trace_events,
             *self.memory_manager.trace_events,
-            event,
+            *self._learning_events,
         ]
+
+    def _build_default_memory_manager(self) -> MyMemoryManager:
+        """Create a no-service default memory stack for local demos.
+
+        真正接 Qdrant/Neo4j 时可以从外部注入 manager；默认构造要能在教程
+        smoke demo 里直接跑，所以 semantic/episodic 先用本地 store 承载。
+        """
+
+        return MyMemoryManager(
+            user_id="learner",
+            stores={
+                "working": WorkingMemoryStore(),
+                "semantic": WorkingMemoryStore(),
+                "episodic": WorkingMemoryStore(),
+                "perceptual": PerceptualMemoryStore(),
+            },
+        )
 
     def _format_memory_context(self, hits: list[Any]) -> str:
         if not hits:

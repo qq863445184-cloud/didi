@@ -57,6 +57,7 @@ def build_assistant():
         stores={
             "working": WorkingMemoryStore(),
             "episodic": WorkingMemoryStore(),
+            "semantic": WorkingMemoryStore(),
         },
     )
     return DocumentLearningAssistant(
@@ -129,3 +130,24 @@ def test_document_learning_assistant_builds_review_report_from_memory():
     assert "学习报告" in report
     assert "rag_notes.md" in report
     assert "RAG 学习流程" in report
+
+
+def test_document_learning_assistant_supports_notes_recall_stats_and_report():
+    assistant = build_assistant()
+
+    note_result = assistant.add_note(
+        "RAG 的关键是先召回相关片段，再让模型基于上下文回答。",
+        importance=0.85,
+    )
+    recall_result = assistant.recall("相关片段 上下文")
+    stats = assistant.get_stats()
+    report = assistant.generate_report()
+
+    assert "已保存学习笔记" in note_result
+    assert "RAG 的关键" in recall_result
+    assert stats["by_type"]["semantic"] == 1
+    assert stats["by_type"]["working"] == 1
+    assert "学习报告" in report
+    assert "RAG 的关键" in report
+    assert any(event["stage"] == "learning.add_note" for event in assistant.trace_events)
+    assert any(event["stage"] == "learning.recall" for event in assistant.trace_events)
