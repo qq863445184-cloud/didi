@@ -62,6 +62,7 @@ class MyMemoryManager:
         memory_types: list[str] | None = None,
         limit: int = 5,
         min_importance: float | None = None,
+        session_id: str | None = None,
     ) -> list[MemorySearchResult]:
         target_types = self._resolve_memory_types(memory_type, memory_types)
         results: list[MemorySearchResult] = []
@@ -76,6 +77,12 @@ class MyMemoryManager:
                     for item in store_results
                     if item.record.importance >= min_importance
                 ]
+            if session_id:
+                store_results = [
+                    item
+                    for item in store_results
+                    if item.record.metadata.get("session_id") == session_id
+                ]
             results.extend(store_results)
         results.sort(key=lambda item: item.score, reverse=True)
         results = results[:limit]
@@ -87,19 +94,33 @@ class MyMemoryManager:
                 "query": query,
                 "limit": limit,
                 "min_importance": min_importance,
+                "session_id": session_id,
                 "hits": len(results),
             }
         )
         return results
 
-    def summary(self, *, memory_type: str = "working", limit: int = 5) -> list[MemoryRecord]:
+    def summary(
+        self,
+        *,
+        memory_type: str = "working",
+        limit: int = 5,
+        session_id: str | None = None,
+    ) -> list[MemoryRecord]:
         store = self._get_store(memory_type)
-        records = store.summary(limit=limit)
+        records = store.summary(limit=limit if not session_id else 10_000)
+        if session_id:
+            records = [
+                record
+                for record in records
+                if record.metadata.get("session_id") == session_id
+            ][:limit]
         self.trace_events.append(
             {
                 "stage": "manager.summary",
                 "memory_type": memory_type,
                 "limit": limit,
+                "session_id": session_id,
                 "count": len(records),
             }
         )

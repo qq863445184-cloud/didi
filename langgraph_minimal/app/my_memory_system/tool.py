@@ -71,6 +71,12 @@ class MyMemoryTool(Tool):
                 required=False,
             ),
             ToolParameter(
+                name="session_id",
+                type="string",
+                description="会话 ID，用于保存或过滤当前会话的记忆",
+                required=False,
+            ),
+            ToolParameter(
                 name="importance",
                 type="number",
                 description="记忆重要性，0 到 1",
@@ -201,6 +207,11 @@ class MyMemoryTool(Tool):
                 if parameters.get("min_importance") is not None
                 else None
             ),
+            session_id=(
+                str(parameters["session_id"]).strip()
+                if parameters.get("session_id")
+                else None
+            ),
         )
         return self._format_search_result(results)
 
@@ -208,6 +219,11 @@ class MyMemoryTool(Tool):
         records = self.manager.summary(
             memory_type=memory_type,
             limit=int(parameters.get("limit", 5)),
+            session_id=(
+                str(parameters["session_id"]).strip()
+                if parameters.get("session_id")
+                else None
+            ),
         )
         return self._format_summary_result(records)
 
