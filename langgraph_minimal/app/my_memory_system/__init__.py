@@ -1,4 +1,9 @@
 from .manager import MyMemoryManager
+from .document_learning_assistant import (
+    DocumentLearningAnswer,
+    DocumentLearningAssistant,
+    DocumentLoadResult,
+)
 from .entity_extraction import SpacyEntityExtractor
 from .models import MemoryRecord, MemorySearchResult
 from .perception_tool import MyPerceptionTool
@@ -11,6 +16,9 @@ from .tool import MyMemoryTool
 __all__ = [
     "MemoryRecord",
     "MemorySearchResult",
+    "DocumentLearningAnswer",
+    "DocumentLearningAssistant",
+    "DocumentLoadResult",
     "EpisodicMemoryStore",
     "MyMemoryManager",
     "MyMemoryTool",
