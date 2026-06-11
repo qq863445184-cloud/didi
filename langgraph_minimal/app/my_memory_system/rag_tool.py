@@ -282,7 +282,6 @@ class MyRAGTool(Tool):
                 score_threshold=score_threshold,
             )
 
-        candidate_queries = self._build_candidate_queries(query, parameters)
         pool_size = int(parameters.get("candidate_pool_size") or max(limit * 2, limit))
 
         candidates: list[dict[str, Any]] = []
