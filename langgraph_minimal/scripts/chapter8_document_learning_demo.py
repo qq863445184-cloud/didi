@@ -137,7 +137,8 @@ def main() -> None:
         print(assistant.load_document(document_path, chunk_size=48, chunk_overlap=8).raw_output)
 
         print("\n[2] ask")
-        answer = assistant.ask(args.question, limit=3)
+        answer = assistant.ask_auto(args.question, limit=3)
+        print(f"route={answer.route}")
         print(answer.answer)
 
         print("\n[3] add note")

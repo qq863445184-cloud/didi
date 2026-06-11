@@ -30,6 +30,7 @@ class DocumentLearningAnswer:
     memory_context: str
     trace: list[dict[str, Any]]
     raw_output: str
+    route: str = "hybrid"
 
 
 class DocumentLearningAssistant:
@@ -175,7 +176,68 @@ class DocumentLearningAssistant:
             memory_context=memory_context,
             trace=list(self.trace_events),
             raw_output=rag_output,
+            route="hybrid",
         )
+
+    def route_query(self, question: str) -> str:
+        """Choose a retrieval path for a learning question.
+
+        这不是替代模型判断，而是教学版的透明路由器：文档证据问题走 RAG，
+        学习历史/笔记问题走 Memory，两类线索都出现时走 Hybrid。
+        """
+
+        text = question.lower()
+        rag_markers = {"文档", "资料", "根据", "原文", "知识库", "rag"}
+        memory_markers = {"之前", "历史", "记得", "记忆", "笔记", "我保存", "学过"}
+        wants_rag = any(marker in text for marker in rag_markers)
+        wants_memory = any(marker in text for marker in memory_markers)
+
+        if wants_rag and wants_memory:
+            route = "hybrid"
+        elif wants_memory:
+            route = "memory"
+        elif wants_rag or self.current_document:
+            route = "rag"
+        else:
+            route = "hybrid"
+
+        self._append_trace(
+            {
+                "stage": "learning.route",
+                "question": question,
+                "route": route,
+                "wants_rag": wants_rag,
+                "wants_memory": wants_memory,
+            }
+        )
+        return route
+
+    def ask_auto(self, question: str, *, limit: int = 5) -> DocumentLearningAnswer:
+        """Answer by first routing to RAG, Memory, or Hybrid retrieval."""
+
+        route = self.route_query(question)
+        if route == "memory":
+            recall_output = self.recall(question, limit=limit)
+            return DocumentLearningAnswer(
+                answer=recall_output,
+                references=[],
+                memory_context=recall_output,
+                trace=list(self.trace_events),
+                raw_output=recall_output,
+                route=route,
+            )
+
+        answer = self.ask(question, limit=limit)
+        answer.route = route
+        self._append_trace(
+            {
+                "stage": "learning.ask_auto",
+                "question": question,
+                "route": route,
+            }
+        )
+        answer.trace = list(self.trace_events)
+        return answer
 
     def learning_report(self, *, limit: int = 10) -> str:
         """Build a lightweight review report from session memories."""

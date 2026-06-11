@@ -26,8 +26,8 @@ class DocumentLearningUI:
     def ask(self, question: str) -> str:
         if not question.strip():
             return "请输入问题。"
-        result = self.assistant.ask(question)
-        lines = [result.answer]
+        result = self.assistant.ask_auto(question)
+        lines = [f"路由：{result.route}", "", result.answer]
         if result.references:
             lines.append("")
             lines.append("参考来源：")

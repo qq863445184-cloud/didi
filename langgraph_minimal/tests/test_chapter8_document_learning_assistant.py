@@ -178,3 +178,27 @@ def test_document_learning_assistant_tracks_session_stats_and_saves_json_report(
     assert report["report_file"] == str(report_path)
     assert report_path.exists()
     assert "rag_notes.md" in report_path.read_text(encoding="utf-8")
+
+
+def test_document_learning_assistant_routes_rag_memory_and_hybrid_questions(tmp_path):
+    assistant = build_assistant()
+    doc_path = tmp_path / "rag_notes.md"
+    doc_path.write_text(
+        "RAG 学习流程包括文档入库、语义检索、基于上下文回答和引用追踪。",
+        encoding="utf-8",
+    )
+    assistant.load_document(doc_path, chunk_size=40, chunk_overlap=5)
+    assistant.add_note("RAG 学习要关注知识库证据。")
+
+    assert assistant.route_query("根据文档，RAG 学习流程包括什么？") == "rag"
+    assert assistant.route_query("我之前保存了哪些学习笔记？") == "memory"
+    assert assistant.route_query("结合文档和我的学习笔记说明 RAG。") == "hybrid"
+
+    memory_answer = assistant.ask_auto("我之前保存了哪些学习笔记？")
+    hybrid_answer = assistant.ask_auto("结合文档和我的学习笔记说明 RAG。")
+
+    assert memory_answer.route == "memory"
+    assert "RAG 学习要关注知识库证据" in memory_answer.answer
+    assert hybrid_answer.route == "hybrid"
+    assert hybrid_answer.references
+    assert any(event["stage"] == "learning.route" for event in assistant.trace_events)
