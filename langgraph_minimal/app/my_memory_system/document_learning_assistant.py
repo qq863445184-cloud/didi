@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
+from time import time
 from typing import Any
 
 from .manager import MyMemoryManager
@@ -52,6 +54,11 @@ class DocumentLearningAssistant:
         self.memory_manager = memory_manager or self._build_default_memory_manager()
         self.namespace = namespace
         self.session_id = session_id
+        self.session_start = time()
+        self.documents_loaded = 0
+        self.questions_asked = 0
+        self.concepts_learned = 0
+        self.current_document: str | None = None
         self._learning_events: list[dict[str, Any]] = []
         self.trace_events: list[dict[str, Any]] = []
 
@@ -88,6 +95,8 @@ class DocumentLearningAssistant:
                 "file_path": str(path),
             },
         )
+        self.documents_loaded += 1
+        self.current_document = effective_document_id
 
         self._append_trace(
             {
@@ -150,6 +159,7 @@ class DocumentLearningAssistant:
             importance=0.75,
             metadata={"session_id": self.session_id, "event_type": "document_qa"},
         )
+        self.questions_asked += 1
 
         self._append_trace(
             {
@@ -235,6 +245,7 @@ class DocumentLearningAssistant:
                 "semantic_memory_id": semantic_record.memory_id,
             },
         )
+        self.concepts_learned += 1
         self._append_trace(
             {
                 "stage": "learning.add_note",
@@ -276,13 +287,76 @@ class DocumentLearningAssistant:
         """Expose store inventory for the learning assistant."""
 
         stats = self.memory_manager.stats()
-        self._append_trace({"stage": "learning.stats", "total": stats["total"]})
+        stats["learning_metrics"] = self._learning_metrics()
+        self._append_trace(
+            {
+                "stage": "learning.stats",
+                "total": stats["total"],
+                **stats["learning_metrics"],
+            }
+        )
         return stats
 
-    def generate_report(self, *, limit: int = 10) -> str:
-        """Alias matching the chapter 8 example naming."""
+    def generate_report(
+        self,
+        *,
+        limit: int = 10,
+        save_to_file: bool = False,
+        file_path: str | Path | None = None,
+    ) -> dict[str, Any]:
+        """Build a structured report matching the chapter 8 example naming."""
 
-        return self.learning_report(limit=limit)
+        report = {
+            "title": "学习报告",
+            "session_id": self.session_id,
+            "namespace": self.namespace,
+            "learning_metrics": self._learning_metrics(),
+            "memory_summary": {
+                "episodic": [
+                    record.content
+                    for record in self.memory_manager.summary(
+                        memory_type="episodic",
+                        limit=limit,
+                        session_id=self.session_id,
+                    )
+                ],
+                "working": [
+                    record.content
+                    for record in self.memory_manager.summary(
+                        memory_type="working",
+                        limit=limit,
+                        session_id=self.session_id,
+                    )
+                ],
+                "semantic": [
+                    record.content
+                    for record in self.memory_manager.summary(
+                        memory_type="semantic",
+                        limit=limit,
+                        session_id=self.session_id,
+                    )
+                ],
+            },
+            "rag_status": self.rag_tool.run({"action": "stats"}),
+            "report_file": None,
+        }
+        if save_to_file:
+            target = Path(file_path) if file_path is not None else Path("learning_report.json")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(
+                json.dumps(report, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            report["report_file"] = str(target)
+
+        self._append_trace(
+            {
+                "stage": "learning.generate_report",
+                "save_to_file": save_to_file,
+                "report_file": report["report_file"],
+            }
+        )
+        return report
 
     def _append_trace(self, event: dict[str, Any]) -> None:
         self._learning_events.append(event)
@@ -309,6 +383,15 @@ class DocumentLearningAssistant:
                 "perceptual": PerceptualMemoryStore(),
             },
         )
+
+    def _learning_metrics(self) -> dict[str, Any]:
+        return {
+            "session_duration_seconds": round(time() - self.session_start, 3),
+            "documents_loaded": self.documents_loaded,
+            "questions_asked": self.questions_asked,
+            "concepts_learned": self.concepts_learned,
+            "current_document": self.current_document,
+        }
 
     def _format_memory_context(self, hits: list[Any]) -> str:
         if not hits:

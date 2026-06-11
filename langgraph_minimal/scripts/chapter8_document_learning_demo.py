@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import tempfile
 from pathlib import Path
@@ -146,7 +147,7 @@ def main() -> None:
         print(assistant.recall(args.note, limit=3))
 
         print("\n[5] learning report")
-        print(assistant.generate_report())
+        print(json.dumps(assistant.generate_report(), ensure_ascii=False, indent=2))
 
         print("\n[6] trace")
         for event in assistant.trace_events:

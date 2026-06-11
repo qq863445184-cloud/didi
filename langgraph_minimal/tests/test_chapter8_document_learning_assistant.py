@@ -147,7 +147,34 @@ def test_document_learning_assistant_supports_notes_recall_stats_and_report():
     assert "RAG 的关键" in recall_result
     assert stats["by_type"]["semantic"] == 1
     assert stats["by_type"]["working"] == 1
-    assert "学习报告" in report
-    assert "RAG 的关键" in report
+    assert stats["learning_metrics"]["concepts_learned"] == 1
+    assert report["title"] == "学习报告"
+    assert any("RAG 的关键" in item for item in report["memory_summary"]["semantic"])
     assert any(event["stage"] == "learning.add_note" for event in assistant.trace_events)
     assert any(event["stage"] == "learning.recall" for event in assistant.trace_events)
+
+
+def test_document_learning_assistant_tracks_session_stats_and_saves_json_report(tmp_path):
+    assistant = build_assistant()
+    doc_path = tmp_path / "rag_notes.md"
+    doc_path.write_text(
+        "RAG 学习流程包括文档入库、语义检索、基于上下文回答和引用追踪。",
+        encoding="utf-8",
+    )
+
+    assistant.load_document(doc_path, chunk_size=40, chunk_overlap=5)
+    assistant.ask("RAG 学习流程包括什么？")
+    assistant.add_note("RAG 学习要关注引用来源。")
+    report_path = tmp_path / "learning_report.json"
+
+    stats = assistant.get_stats()
+    report = assistant.generate_report(save_to_file=True, file_path=report_path)
+
+    assert stats["learning_metrics"]["documents_loaded"] == 1
+    assert stats["learning_metrics"]["questions_asked"] == 1
+    assert stats["learning_metrics"]["concepts_learned"] == 1
+    assert stats["learning_metrics"]["current_document"] == "rag_notes.md"
+    assert report["learning_metrics"] == stats["learning_metrics"]
+    assert report["report_file"] == str(report_path)
+    assert report_path.exists()
+    assert "rag_notes.md" in report_path.read_text(encoding="utf-8")

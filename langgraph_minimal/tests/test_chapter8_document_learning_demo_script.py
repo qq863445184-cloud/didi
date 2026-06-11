@@ -16,7 +16,8 @@ def test_chapter8_document_learning_demo_runs_learning_workflow(tmp_path):
     assert answer.references
     assert "已保存学习笔记" in note_result
     assert "知识库证据" in recall_result
-    assert "学习报告" in report
+    assert report["title"] == "学习报告"
+    assert report["learning_metrics"]["documents_loaded"] == 1
     assert any(event["stage"] == "learning.load_document" for event in assistant.trace_events)
     assert any(event["stage"] == "learning.ask" for event in assistant.trace_events)
     assert any(event["stage"] == "learning.add_note" for event in assistant.trace_events)
