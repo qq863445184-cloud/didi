@@ -52,6 +52,10 @@ class MyRAGTool(Tool):
             ToolParameter(name="limit", type="integer", description="返回条数", required=False, default=5),
             ToolParameter(name="chunk_size", type="integer", description="切块字符数", required=False, default=800),
             ToolParameter(name="chunk_overlap", type="integer", description="相邻块重叠字符数", required=False, default=100),
+            ToolParameter(name="enable_mqe", type="boolean", description="是否启用多查询扩展检索", required=False, default=False),
+            ToolParameter(name="enable_hyde", type="boolean", description="是否启用 HyDE 假设答案检索", required=False, default=False),
+            ToolParameter(name="score_threshold", type="number", description="最低相似度阈值", required=False),
+            ToolParameter(name="candidate_pool_size", type="integer", description="每个候选查询的召回池大小", required=False),
         ]
 
     def validate_parameters(self, parameters: dict[str, Any]) -> bool:
@@ -160,7 +164,13 @@ class MyRAGTool(Tool):
         query = str(parameters.get("query") or parameters.get("question")).strip()
         namespace = str(parameters.get("namespace", "default"))
         limit = int(parameters.get("limit", 5))
-        results = self._retrieve(query=query, namespace=namespace, limit=limit)
+        results = self._retrieve_with_options(
+            query=query,
+            namespace=namespace,
+            limit=limit,
+            parameters=parameters,
+        )
+        candidate_queries = self._last_candidate_query_count(query)
 
         self.trace_events.append(
             {
@@ -168,6 +178,7 @@ class MyRAGTool(Tool):
                 "query": query,
                 "namespace": namespace,
                 "hits": len(results),
+                "candidate_queries": candidate_queries,
             }
         )
         if not results:
@@ -188,7 +199,12 @@ class MyRAGTool(Tool):
         question = str(parameters.get("question") or parameters.get("query")).strip()
         namespace = str(parameters.get("namespace", "default"))
         limit = int(parameters.get("limit", 5))
-        results = self._retrieve(query=question, namespace=namespace, limit=limit)
+        results = self._retrieve_with_options(
+            query=question,
+            namespace=namespace,
+            limit=limit,
+            parameters=parameters,
+        )
 
         if not results:
             return f"未找到与 '{question}' 相关的知识库内容。"
@@ -230,10 +246,86 @@ class MyRAGTool(Tool):
         return f"RAG collection={self.collection_name}, 当前进程已添加 chunk 数={self.added_chunks}"
 
     def _retrieve(self, *, query: str, namespace: str, limit: int) -> list[dict[str, Any]]:
+        return self._retrieve_once(
+            query=query,
+            namespace=namespace,
+            limit=limit,
+            score_threshold=None,
+        )
+
+    def _retrieve_with_options(
+        self,
+        *,
+        query: str,
+        namespace: str,
+        limit: int,
+        parameters: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        candidate_queries = self._build_candidate_queries(query, parameters)
+        score_threshold = (
+            float(parameters["score_threshold"])
+            if parameters.get("score_threshold") is not None
+            else None
+        )
+        if (
+            not self._as_bool(parameters.get("enable_mqe"))
+            and not self._as_bool(parameters.get("enable_hyde"))
+        ):
+            return self._retrieve_once(
+                query=query,
+                namespace=namespace,
+                limit=limit,
+                score_threshold=score_threshold,
+            )
+
+        candidate_queries = self._build_candidate_queries(query, parameters)
+        pool_size = int(parameters.get("candidate_pool_size") or max(limit * 2, limit))
+
+        candidates: list[dict[str, Any]] = []
+        for candidate_query in candidate_queries:
+            candidates.extend(
+                self._retrieve_once(
+                    query=candidate_query,
+                    namespace=namespace,
+                    limit=pool_size,
+                    score_threshold=score_threshold,
+                )
+            )
+
+        merged = self._merge_candidates(candidates)
+        self.trace_events.append(
+            {
+                "stage": "rag.merge_candidates",
+                "query": query,
+                "candidate_queries": len(candidate_queries),
+                "raw_candidates": len(candidates),
+                "merged_candidates": len(merged),
+                "score_threshold": score_threshold,
+            }
+        )
+        return merged[:limit]
+
+    def _last_candidate_query_count(self, query: str) -> int:
+        if not self.trace_events:
+            return 1
+        event = self.trace_events[-1]
+        if event.get("stage") == "rag.merge_candidates" and event.get("query") == query:
+            return int(event.get("candidate_queries", 1))
+        return 1
+
+    def _retrieve_once(
+        self,
+        *,
+        query: str,
+        namespace: str,
+        limit: int,
+        score_threshold: float | None,
+    ) -> list[dict[str, Any]]:
         query_vector = self._encode_one(query)
         hits = self.vector_store.search_similar(
             query_vector=query_vector,
             limit=limit,
+            score_threshold=score_threshold,
             where={
                 "namespace": namespace,
                 "memory_type": "rag_chunk",
@@ -243,6 +335,9 @@ class MyRAGTool(Tool):
         results: list[dict[str, Any]] = []
         seen_contents: set[str] = set()
         for hit in hits:
+            score = float(hit.get("score", 0.0))
+            if score_threshold is not None and score < score_threshold:
+                continue
             meta = hit.get("metadata", {}) or {}
             content = str(meta.get("content", ""))
             if not content or content in seen_contents:
@@ -251,11 +346,95 @@ class MyRAGTool(Tool):
             results.append(
                 {
                     "id": hit.get("id"),
-                    "score": float(hit.get("score", 0.0)),
+                    "score": score,
                     "metadata": meta,
                 }
             )
         return results[:limit]
+
+    def _build_candidate_queries(self, query: str, parameters: dict[str, Any]) -> list[str]:
+        queries = [query]
+        if self._as_bool(parameters.get("enable_mqe")):
+            queries.extend(self._generate_mqe_queries(query))
+        if self._as_bool(parameters.get("enable_hyde")):
+            queries.append(self._generate_hyde_document(query))
+
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for item in queries:
+            normalized = item.strip()
+            if normalized and normalized not in seen:
+                deduped.append(normalized)
+                seen.add(normalized)
+        return deduped
+
+    def _generate_mqe_queries(self, query: str) -> list[str]:
+        prompt = [
+            {
+                "role": "system",
+                "content": "你是一个检索查询改写器，只输出改写后的查询，每行一个。",
+            },
+            {
+                "role": "user",
+                "content": f"请把下面问题改写成 3 个适合向量检索的中文查询：\n{query}",
+            },
+        ]
+        response = str(self.llm.invoke(prompt)).strip()
+        queries = [
+            line.strip("- 0123456789.、\t ")
+            for line in response.splitlines()
+            if line.strip()
+        ]
+        self.trace_events.append(
+            {
+                "stage": "rag.expand_mqe",
+                "query": query,
+                "generated": queries,
+            }
+        )
+        return queries
+
+    def _generate_hyde_document(self, query: str) -> str:
+        prompt = [
+            {
+                "role": "system",
+                "content": "你是一个 HyDE 检索助手，只生成假设性答案文本。",
+            },
+            {
+                "role": "user",
+                "content": f"请针对问题生成一段可能出现在知识库中的假设性答案：\n{query}",
+            },
+        ]
+        document = str(self.llm.invoke(prompt)).strip()
+        self.trace_events.append(
+            {
+                "stage": "rag.expand_hyde",
+                "query": query,
+                "document": document,
+            }
+        )
+        return document
+
+    def _merge_candidates(self, candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        by_key: dict[str, dict[str, Any]] = {}
+        for candidate in candidates:
+            meta = candidate.get("metadata", {}) or {}
+            key = str(candidate.get("id") or meta.get("content") or "")
+            if not key:
+                continue
+            existing = by_key.get(key)
+            if existing is None or candidate["score"] > existing["score"]:
+                by_key[key] = candidate
+        merged = list(by_key.values())
+        merged.sort(key=lambda item: item["score"], reverse=True)
+        return merged
+
+    def _as_bool(self, value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+        return bool(value)
 
     def _chunk_text(self, text: str, *, chunk_size: int, chunk_overlap: int) -> list[str]:
         chunk_size = max(1, chunk_size)

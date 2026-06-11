@@ -14,6 +14,19 @@ class FakeEmbedder:
         return vectors
 
 
+class AdvancedFakeEmbedder:
+    def encode(self, texts):
+        vectors = []
+        for text in texts:
+            if "风险控制" in text or "风控" in text or "贷款" in text:
+                vectors.append([1.0, 0.0])
+            elif "审批" in text:
+                vectors.append([0.0, 1.0])
+            else:
+                vectors.append([0.0, 0.0])
+        return vectors
+
+
 class FakeVectorStore:
     def __init__(self) -> None:
         self.rows = []
@@ -48,12 +61,35 @@ class FakeLLM:
         return "LangGraph 适合金融审批，因为图结构让流程可追踪、可审计。"
 
 
+class AdvancedFakeLLM:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def invoke(self, messages, **kwargs):
+        self.calls.append(messages)
+        prompt = messages[-1]["content"]
+        if "改写成 3 个" in prompt:
+            return "风险控制\n贷款风控\n信贷风险"
+        if "生成一段可能出现在知识库中的假设性答案" in prompt:
+            return "贷款审批系统通常包含风险控制、额度评估和合规检查。"
+        return "基于增强检索得到答案。"
+
+
 def build_tool(llm=None):
     return MyRAGTool(
         embedder=FakeEmbedder(),
         vector_store=FakeVectorStore(),
         llm=llm or FakeLLM(),
         collection_name="test_rag",
+    )
+
+
+def build_advanced_tool(llm=None):
+    return MyRAGTool(
+        embedder=AdvancedFakeEmbedder(),
+        vector_store=FakeVectorStore(),
+        llm=llm or AdvancedFakeLLM(),
+        collection_name="test_rag_advanced",
     )
 
 
@@ -179,3 +215,79 @@ def test_my_rag_tool_rejects_missing_document():
 
     assert "错误" in result
     assert "文件不存在" in result
+
+
+def test_my_rag_tool_mqe_expands_query_and_merges_candidates():
+    tool = build_advanced_tool()
+    tool.run(
+        {
+            "action": "add_text",
+            "text": "贷款审批系统需要风险控制和合规检查。",
+            "document_id": "risk_doc",
+            "namespace": "advanced",
+        }
+    )
+
+    result = tool.run(
+        {
+            "action": "search",
+            "query": "审批系统",
+            "namespace": "advanced",
+            "enable_mqe": True,
+            "limit": 3,
+        }
+    )
+
+    assert "搜索结果" in result
+    assert "risk_doc" in result
+    assert any(event["stage"] == "rag.expand_mqe" for event in tool.trace_events)
+    assert tool.trace_events[-1]["candidate_queries"] >= 2
+
+
+def test_my_rag_tool_hyde_retrieves_from_hypothetical_answer():
+    tool = build_advanced_tool()
+    tool.run(
+        {
+            "action": "add_text",
+            "text": "贷款审批系统需要风险控制和合规检查。",
+            "document_id": "hyde_doc",
+            "namespace": "advanced",
+        }
+    )
+
+    result = tool.run(
+        {
+            "action": "search",
+            "query": "审批系统有哪些模块",
+            "namespace": "advanced",
+            "enable_hyde": True,
+            "limit": 3,
+        }
+    )
+
+    assert "搜索结果" in result
+    assert "hyde_doc" in result
+    assert any(event["stage"] == "rag.expand_hyde" for event in tool.trace_events)
+
+
+def test_my_rag_tool_score_threshold_filters_low_scores():
+    tool = build_advanced_tool()
+    tool.run(
+        {
+            "action": "add_text",
+            "text": "贷款审批系统需要风险控制。",
+            "document_id": "risk_doc",
+            "namespace": "advanced",
+        }
+    )
+
+    result = tool.run(
+        {
+            "action": "search",
+            "query": "无关查询",
+            "namespace": "advanced",
+            "score_threshold": 0.5,
+        }
+    )
+
+    assert "未找到" in result
