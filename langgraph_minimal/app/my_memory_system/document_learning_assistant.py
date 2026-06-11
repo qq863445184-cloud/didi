@@ -402,6 +402,7 @@ class DocumentLearningAssistant:
             "rag_status": self.rag_tool.run({"action": "stats"}),
             "report_file": None,
         }
+        report["analysis"] = self._analyze_learning_report(report)
         if save_to_file:
             target = Path(file_path) if file_path is not None else Path("learning_report.json")
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -453,6 +454,45 @@ class DocumentLearningAssistant:
             "questions_asked": self.questions_asked,
             "concepts_learned": self.concepts_learned,
             "current_document": self.current_document,
+        }
+
+    def _analyze_learning_report(self, report: dict[str, Any]) -> dict[str, list[str]]:
+        """Infer learning trajectory, gaps, and next actions from memory summaries."""
+
+        memory_summary = report["memory_summary"]
+        metrics = report["learning_metrics"]
+        episodic = list(memory_summary.get("episodic", []))
+        working = list(memory_summary.get("working", []))
+        semantic = list(memory_summary.get("semantic", []))
+
+        trajectory = episodic or ["尚未形成学习事件轨迹。"]
+        gaps: list[str] = []
+        recommendations: list[str] = []
+
+        if metrics["documents_loaded"] == 0:
+            gaps.append("尚未加载学习文档，缺少可追溯的知识库证据。")
+            recommendations.append("建议先加载一份 PDF 或 Markdown 文档，再开始问答。")
+        if metrics["questions_asked"] == 0:
+            gaps.append("尚未提出问题，RAG 检索链路还没有被验证。")
+            recommendations.append("建议围绕文档提出 2-3 个核心问题，观察引用来源。")
+        if metrics["concepts_learned"] == 0:
+            gaps.append("尚未沉淀语义学习笔记，长期记忆较弱。")
+            recommendations.append("建议把每次问答后的关键概念写入学习笔记。")
+
+        joined_notes = "\n".join([*working, *semantic])
+        if "记忆" not in joined_notes and "Memory" not in joined_notes:
+            gaps.append("当前笔记偏向 RAG 流程，对 Memory 如何参与学习闭环覆盖不足。")
+            recommendations.append("建议继续追问 Memory 与 RAG 的分工，并补充一条相关学习笔记。")
+
+        if not gaps:
+            gaps.append("暂未发现明显知识盲点，可进入更高阶的综合应用练习。")
+        if not recommendations:
+            recommendations.append("建议继续使用 ask_auto 对比 RAG、Memory、Hybrid 三种路由效果。")
+
+        return {
+            "learning_trajectory": trajectory,
+            "knowledge_gaps": gaps,
+            "recommendations": recommendations,
         }
 
     def _format_memory_context(self, hits: list[Any]) -> str:

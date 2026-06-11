@@ -202,3 +202,23 @@ def test_document_learning_assistant_routes_rag_memory_and_hybrid_questions(tmp_
     assert hybrid_answer.route == "hybrid"
     assert hybrid_answer.references
     assert any(event["stage"] == "learning.route" for event in assistant.trace_events)
+
+
+def test_document_learning_assistant_report_analyzes_trajectory_gaps_and_recommendations(tmp_path):
+    assistant = build_assistant()
+    doc_path = tmp_path / "rag_notes.md"
+    doc_path.write_text(
+        "RAG 学习流程包括文档入库、语义检索、基于上下文回答和引用追踪。",
+        encoding="utf-8",
+    )
+    assistant.load_document(doc_path, chunk_size=40, chunk_overlap=5)
+    assistant.ask_auto("根据文档，RAG 学习流程包括什么？")
+    assistant.ask_auto("我之前保存了哪些学习笔记？")
+    assistant.add_note("RAG 学习要关注引用来源。")
+
+    report = assistant.generate_report()
+
+    assert "analysis" in report
+    assert "加载学习文档" in "\n".join(report["analysis"]["learning_trajectory"])
+    assert any("Memory" in item or "记忆" in item for item in report["analysis"]["knowledge_gaps"])
+    assert any("继续" in item or "建议" in item for item in report["analysis"]["recommendations"])
