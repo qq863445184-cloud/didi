@@ -44,6 +44,13 @@ Heavy OCR/ASR packages can live outside the main Python environment. The main `.
 can call `.venv-asr` through `chapter8_multimodal_worker.py`, which keeps
 FunASR/PaddleOCR dependencies isolated from the agent runtime.
 
+Create or refresh the external runtime with:
+
+```powershell
+py -3.11 -m venv .venv-asr
+.\.venv-asr\Scripts\python.exe -m pip install -r requirements-multimodal.txt
+```
+
 ## Multimodal Runtime
 
 The default lightweight demo uses injected OCR/ASR and deterministic embeddings.
