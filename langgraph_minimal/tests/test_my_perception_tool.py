@@ -1,6 +1,13 @@
 from pathlib import Path
 
-from app.my_memory_system import MyMemoryManager, MyPerceptionTool, MyRAGTool, PerceptualMemoryStore
+from app.my_memory_system import (
+    EpisodicMemoryStore,
+    MyMemoryManager,
+    MyPerceptionTool,
+    MyRAGTool,
+    PerceptualMemoryStore,
+    SemanticMemoryStore,
+)
 
 
 class FakeEmbedder:
@@ -35,6 +42,43 @@ class FakeVectorStore:
             hits.append({"id": row["id"], "score": score, "metadata": row["metadata"]})
         hits.sort(key=lambda item: item["score"], reverse=True)
         return hits[:limit]
+
+
+class FakeGraphStore:
+    def __init__(self) -> None:
+        self.entities = {}
+        self.relationships = []
+
+    def add_entity(self, entity_id, name, entity_type, properties=None):
+        self.entities[entity_id] = {
+            "id": entity_id,
+            "name": name,
+            "type": entity_type,
+            **(properties or {}),
+        }
+        return True
+
+    def add_relationship(self, from_entity_id, to_entity_id, relationship_type, properties=None):
+        self.relationships.append(
+            {
+                "from": from_entity_id,
+                "to": to_entity_id,
+                "type": relationship_type,
+                "properties": properties or {},
+            }
+        )
+        return True
+
+    def search_entities_by_name(self, name_pattern, entity_types=None, limit=5):
+        terms = [term.lower() for term in str(name_pattern).split() if term.strip()]
+        rows = []
+        for entity in self.entities.values():
+            if entity_types and entity.get("type") not in entity_types:
+                continue
+            haystack = " ".join(str(value) for value in entity.values()).lower()
+            if not terms or any(term in haystack for term in terms):
+                rows.append(entity)
+        return rows[:limit]
 
 
 class FakeLLM:
@@ -180,6 +224,54 @@ def test_perception_tool_syncs_audio_asr_text_to_rag_when_configured(tmp_path):
     assert "搜索结果" in rag_result
     assert "meeting.mp3" in rag_result
     assert any(event["stage"] == "perception.sync_rag" for event in tool.trace_events)
+
+
+def test_perception_tool_syncs_extracted_text_to_semantic_and_episodic_memory(tmp_path):
+    audio = tmp_path / "meeting.mp3"
+    audio.write_bytes(b"fake mp3 bytes")
+    manager = MyMemoryManager(
+        user_id="perception_user",
+        stores={
+            "perceptual": PerceptualMemoryStore(),
+            "semantic": SemanticMemoryStore(
+                embedder=FakeEmbedder(),
+                vector_store=FakeVectorStore(),
+                graph_store=None,
+            ),
+            "episodic": EpisodicMemoryStore(graph_store=FakeGraphStore()),
+        },
+    )
+    tool = MyPerceptionTool(
+        manager=manager,
+        audio_asr=lambda path: "会议中讨论了 Qdrant 向量检索和 Neo4j 图谱记忆",
+    )
+
+    result = tool.run(
+        {
+            "action": "ingest_file",
+            "file_path": str(audio),
+            "description": "第八章多模态会议录音",
+            "importance": 0.8,
+        }
+    )
+
+    semantic_hits = manager.search(
+        query="Qdrant Neo4j 图谱记忆",
+        memory_type="semantic",
+    )
+    episodic_hits = manager.search(
+        query="第八章多模态会议录音",
+        memory_type="episodic",
+    )
+
+    assert "semantic_memory_id" in result
+    assert "episodic_memory_id" in result
+    assert semantic_hits
+    assert "Qdrant" in semantic_hits[0].record.content
+    assert episodic_hits
+    assert episodic_hits[0].record.metadata["event_type"] == "perception_ingest"
+    assert any(event["stage"] == "perception.sync_semantic" for event in tool.trace_events)
+    assert any(event["stage"] == "perception.sync_episodic" for event in tool.trace_events)
 
 
 def test_perception_tool_attaches_modality_embedding_when_encoder_is_injected(tmp_path):

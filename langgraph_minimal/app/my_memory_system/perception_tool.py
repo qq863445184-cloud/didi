@@ -214,6 +214,23 @@ class MyPerceptionTool(Tool):
             extraction=extraction,
             description=description,
         )
+        semantic_memory_id = self._sync_extracted_text_to_semantic(
+            file_path=file_path,
+            modality=modality,
+            extraction=extraction,
+            description=description,
+            importance=float(parameters.get("importance", 0.5)),
+        )
+        episodic_memory_id = self._sync_ingest_event_to_episodic(
+            file_path=file_path,
+            modality=modality,
+            extraction=extraction,
+            description=description,
+            importance=float(parameters.get("importance", 0.5)),
+            perceptual_memory_id=record.memory_id,
+            rag_document_id=rag_document_id,
+            semantic_memory_id=semantic_memory_id,
+        )
 
         lines = [
             "Perceptual memory saved:",
@@ -227,6 +244,10 @@ class MyPerceptionTool(Tool):
             lines.append(f"- extracted_text: {preview}")
         if rag_document_id:
             lines.append(f"- rag_document_id: {rag_document_id}")
+        if semantic_memory_id:
+            lines.append(f"- semantic_memory_id: {semantic_memory_id}")
+        if episodic_memory_id:
+            lines.append(f"- episodic_memory_id: {episodic_memory_id}")
         if embedding_meta:
             lines.append(f"- embedding_dim: {embedding_meta['embedding_dim']}")
         return "\n".join(lines)
@@ -546,6 +567,105 @@ class MyPerceptionTool(Tool):
             }
         )
         return document_id
+
+    def _sync_extracted_text_to_semantic(
+        self,
+        *,
+        file_path: Path,
+        modality: str,
+        extraction: dict[str, Any],
+        description: str,
+        importance: float,
+    ) -> str | None:
+        if "semantic" not in self.manager.stores:
+            return None
+        extracted_text = str(extraction.get("extracted_text") or "").strip()
+        if not extracted_text:
+            self._call_trace.append(
+                {
+                    "stage": "perception.skip_semantic_sync",
+                    "file_path": str(file_path),
+                    "modality": modality,
+                    "reason": "empty_extracted_text",
+                }
+            )
+            return None
+
+        content_parts = [
+            f"Semantic knowledge extracted from {modality} file: {file_path.name}.",
+        ]
+        if description:
+            content_parts.append(description)
+        content_parts.append(extracted_text)
+        record = self.manager.add(
+            content=" ".join(content_parts),
+            memory_type="semantic",
+            importance=importance,
+            metadata={
+                "source": "perception",
+                "modality": modality,
+                "file_path": str(file_path),
+                "extractor": extraction.get("extractor", ""),
+                "description": description,
+            },
+        )
+        self._call_trace.append(
+            {
+                "stage": "perception.sync_semantic",
+                "file_path": str(file_path),
+                "modality": modality,
+                "memory_id": record.memory_id,
+            }
+        )
+        return record.memory_id
+
+    def _sync_ingest_event_to_episodic(
+        self,
+        *,
+        file_path: Path,
+        modality: str,
+        extraction: dict[str, Any],
+        description: str,
+        importance: float,
+        perceptual_memory_id: str,
+        rag_document_id: str | None,
+        semantic_memory_id: str | None,
+    ) -> str | None:
+        if "episodic" not in self.manager.stores:
+            return None
+
+        content_parts = [
+            f"Perception ingest event for {modality} file: {file_path.name}.",
+        ]
+        if description:
+            content_parts.append(description)
+        if extraction.get("extracted_text"):
+            content_parts.append(str(extraction["extracted_text"])[:500])
+        record = self.manager.add(
+            content=" ".join(content_parts),
+            memory_type="episodic",
+            importance=importance,
+            metadata={
+                "event_type": "perception_ingest",
+                "source": "perception",
+                "modality": modality,
+                "file_path": str(file_path),
+                "extractor": extraction.get("extractor", ""),
+                "description": description,
+                "perceptual_memory_id": perceptual_memory_id,
+                "rag_document_id": rag_document_id,
+                "semantic_memory_id": semantic_memory_id,
+            },
+        )
+        self._call_trace.append(
+            {
+                "stage": "perception.sync_episodic",
+                "file_path": str(file_path),
+                "modality": modality,
+                "memory_id": record.memory_id,
+            }
+        )
+        return record.memory_id
 
     def _build_content(
         self,
