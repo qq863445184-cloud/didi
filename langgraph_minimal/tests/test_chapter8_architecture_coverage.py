@@ -62,6 +62,7 @@ def test_chapter8_rag_tool_exposes_document_retrieval_actions():
     assert tool.validate_parameters({"action": "stats"})
     assert tool.validate_parameters({"action": "add_text", "text": "hello"})
     assert tool.validate_parameters({"action": "add_document", "file_path": "a.md"})
+    assert tool.validate_parameters({"action": "delete_document", "document_id": "a.md"})
     assert tool.validate_parameters({"action": "search", "query": "RAG"})
     assert tool.validate_parameters({"action": "ask", "question": "RAG?"})
 

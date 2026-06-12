@@ -49,7 +49,7 @@ class MyRAGTool(Tool):
 
     def get_parameters(self) -> list[ToolParameter]:
         return [
-            ToolParameter(name="action", type="string", description="操作：add_text、add_document、search、ask、stats", required=True),
+            ToolParameter(name="action", type="string", description="操作：add_text、add_document、delete_document、search、ask、stats", required=True),
             ToolParameter(name="text", type="string", description="要加入知识库的文本", required=False),
             ToolParameter(name="file_path", type="string", description="要加入知识库的文档路径", required=False),
             ToolParameter(name="document_id", type="string", description="文档 ID", required=False),
@@ -75,6 +75,8 @@ class MyRAGTool(Tool):
             return bool(str(parameters.get("query") or parameters.get("question") or "").strip())
         if action == "ask":
             return bool(str(parameters.get("question") or parameters.get("query") or "").strip())
+        if action == "delete_document":
+            return bool(str(parameters.get("document_id", "")).strip())
         if action == "stats":
             return True
         return False
@@ -89,6 +91,8 @@ class MyRAGTool(Tool):
                 return self._add_text(parameters)
             if action == "add_document":
                 return self._add_document(parameters)
+            if action == "delete_document":
+                return self._delete_document(parameters)
             if action == "search":
                 return self._search(parameters)
             if action == "ask":
@@ -222,6 +226,87 @@ class MyRAGTool(Tool):
                 for index, chunk in enumerate(chunks)
             ],
         )
+
+    def _delete_document(self, parameters: dict[str, Any]) -> str:
+        document_id = str(parameters["document_id"]).strip()
+        namespace = str(parameters.get("namespace", "default"))
+        chunks = (
+            self.document_store.list_chunks(document_id, namespace=namespace)
+            if self.document_store is not None
+            else []
+        )
+
+        vector_deleted = self._delete_document_vectors(
+            document_id=document_id,
+            namespace=namespace,
+            chunk_ids=[str(chunk["chunk_id"]) for chunk in chunks],
+        )
+        metadata_deleted = (
+            self.document_store.delete_document(document_id, namespace=namespace)
+            if self.document_store is not None
+            else False
+        )
+
+        self.trace_events.append(
+            {
+                "stage": "rag.delete_document",
+                "document_id": document_id,
+                "namespace": namespace,
+                "metadata_deleted": bool(metadata_deleted),
+                "vector_deleted": vector_deleted,
+            }
+        )
+        if metadata_deleted or vector_deleted:
+            return (
+                f"文档已删除: {document_id}\n"
+                f"命名空间: {namespace}\n"
+                f"删除向量数: {vector_deleted}"
+            )
+        return f"未找到要删除的文档: {document_id}"
+
+    def _delete_document_vectors(
+        self,
+        *,
+        document_id: str,
+        namespace: str,
+        chunk_ids: list[str],
+    ) -> int:
+        """Delete vectors for one RAG document across common vector-store APIs."""
+
+        if chunk_ids:
+            delete_vectors = getattr(self.vector_store, "delete_vectors", None)
+            if callable(delete_vectors):
+                result = None
+                try:
+                    result = delete_vectors(chunk_ids)
+                except TypeError:
+                    try:
+                        result = delete_vectors(ids=chunk_ids)
+                    except TypeError:
+                        result = None
+                if isinstance(result, bool):
+                    return len(chunk_ids) if result else 0
+                if isinstance(result, int):
+                    return result
+
+        filter_delete = getattr(self.vector_store, "delete_vectors", None)
+        if callable(filter_delete):
+            try:
+                result = filter_delete(
+                    where={
+                        "document_id": document_id,
+                        "namespace": namespace,
+                        "memory_type": "rag_chunk",
+                    }
+                )
+            except TypeError:
+                result = None
+            if isinstance(result, bool):
+                return len(chunk_ids) if result else 0
+            if isinstance(result, int):
+                return result
+
+        return 0
 
     def _search(self, parameters: dict[str, Any]) -> str:
         query = str(parameters.get("query") or parameters.get("question")).strip()

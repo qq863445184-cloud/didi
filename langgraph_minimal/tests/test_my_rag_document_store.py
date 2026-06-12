@@ -17,7 +17,21 @@ class FakeVectorStore:
         return True
 
     def search_similar(self, query_vector, limit=5, score_threshold=None, where=None):
-        return []
+        results = []
+        for row in self.rows:
+            if where and not all(row["metadata"].get(key) == value for key, value in where.items()):
+                continue
+            results.append({"id": row["id"], "score": 1.0, "metadata": row["metadata"]})
+        return results[:limit]
+
+    def delete_vectors(self, *, where):
+        before = len(self.rows)
+        self.rows = [
+            row
+            for row in self.rows
+            if not all(row["metadata"].get(key) == value for key, value in where.items())
+        ]
+        return before - len(self.rows)
 
 
 class FakeLLM:
@@ -125,3 +139,39 @@ def test_sqlite_document_store_filters_by_namespace(tmp_path):
     assert store.get_document("same.md", namespace="b")["namespace"] == "b"
     assert store.list_chunks("same.md", namespace="a") == []
     assert store.list_chunks("same.md", namespace="b")[0]["content"] == "命名空间 b 的内容"
+
+
+def test_my_rag_tool_deletes_document_from_metadata_and_vectors(tmp_path):
+    document_store = SQLiteDocumentStore(tmp_path / "rag_docs.sqlite3")
+    vector_store = FakeVectorStore()
+    tool = MyRAGTool(
+        embedder=FakeEmbedder(),
+        vector_store=vector_store,
+        llm=FakeLLM(),
+        document_store=document_store,
+        collection_name="test_rag_docs",
+    )
+    tool.run(
+        {
+            "action": "add_text",
+            "text": "RAG 删除文档时要同步清理 chunk 元数据和向量索引。",
+            "document_id": "delete_me.md",
+            "namespace": "chapter8",
+            "chunk_size": 20,
+            "chunk_overlap": 0,
+        }
+    )
+
+    result = tool.run(
+        {
+            "action": "delete_document",
+            "document_id": "delete_me.md",
+            "namespace": "chapter8",
+        }
+    )
+
+    assert "文档已删除" in result
+    assert document_store.get_document("delete_me.md", namespace="chapter8") is None
+    assert document_store.list_chunks("delete_me.md", namespace="chapter8") == []
+    assert not any(row["metadata"]["document_id"] == "delete_me.md" for row in vector_store.rows)
+    assert "delete_me.md" not in tool.run({"action": "search", "query": "RAG 删除文档", "namespace": "chapter8"})
