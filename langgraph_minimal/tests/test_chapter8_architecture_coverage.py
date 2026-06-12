@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from app.my_memory_system import (
     DocumentLearningAssistant,
     DocumentLearningUI,
@@ -15,6 +17,22 @@ from app.my_memory_system import (
     WorkingMemoryStore,
     build_gradio_app,
 )
+
+
+def test_chapter8_implementation_note_documents_operational_commands():
+    doc_path = Path("docs/chapter8_memory_system.md")
+    text = doc_path.read_text(encoding="utf-8")
+
+    for keyword in [
+        "working / semantic / episodic / perceptual",
+        "MyRAGTool",
+        "chapter8_backend_health.py",
+        "chapter8_multimodal_worker.py",
+        "chapter8_neo4j_graph_smoke.py",
+        "Qdrant",
+        "Neo4j",
+    ]:
+        assert keyword in text
 
 
 def parameter_names(tool):
