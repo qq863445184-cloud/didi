@@ -493,6 +493,18 @@ class MyRAGTool(Tool):
             content = str(unit["content"]).strip()
             if not content:
                 continue
+            if unit.get("is_heading") and current_parts:
+                chunks.append(
+                    self._make_chunk(
+                        current_parts,
+                        start_char=current_start or 0,
+                        end_char=current_end,
+                        section_title=current_section,
+                    )
+                )
+                current_parts = []
+                current_start = None
+
             if len(content) > chunk_size:
                 if current_parts:
                     chunks.append(
@@ -520,6 +532,11 @@ class MyRAGTool(Tool):
 
             joined = "\n\n".join([*current_parts, content]) if current_parts else content
             if current_parts and len(joined) > chunk_size:
+                if self._can_attach_to_heading(current_parts, content, chunk_size):
+                    current_parts.append(content)
+                    current_end = int(unit["end_char"])
+                    current_section = unit.get("section_title") or current_section
+                    continue
                 chunks.append(
                     self._make_chunk(
                         current_parts,
@@ -528,10 +545,9 @@ class MyRAGTool(Tool):
                         section_title=current_section,
                     )
                 )
-                # 语义单元之间的 overlap 很难按 token 精确复用；这里保留上一块尾部
-                # 文本作为上下文提示，同时不改变真实 start/end 元数据的粗粒度含义。
-                overlap_text = self._tail_overlap(chunks[-1]["content"], chunk_overlap)
-                current_parts = [overlap_text, content] if overlap_text else [content]
+                # 段落/标题之间保持语义边界，不把上一块尾巴塞进下一块。
+                # 字符级 overlap 只用于同一个超长语义单元，避免半截标题或半截句子。
+                current_parts = [content]
                 current_start = int(unit["start_char"])
             else:
                 current_parts.append(content)
@@ -551,6 +567,23 @@ class MyRAGTool(Tool):
             )
         return chunks
 
+    def _can_attach_to_heading(
+        self,
+        current_parts: list[str],
+        content: str,
+        chunk_size: int,
+    ) -> bool:
+        """Keep a Markdown heading with its first paragraph when slightly oversized."""
+
+        if len(current_parts) != 1:
+            return False
+        if not current_parts[0].lstrip().startswith("#"):
+            return False
+        if content.lstrip().startswith("#"):
+            return False
+        joined = "\n\n".join([current_parts[0], content])
+        return len(joined) <= max(chunk_size + 80, int(chunk_size * 2))
+
     def _split_semantic_units(self, text: str) -> list[dict[str, Any]]:
         """Split text into heading/paragraph aware units before vectorization."""
 
@@ -568,6 +601,7 @@ class MyRAGTool(Tool):
                     "start_char": block["start_char"],
                     "end_char": block["end_char"],
                     "section_title": current_section,
+                    "is_heading": stripped.startswith("#"),
                 }
             )
             position = int(block["end_char"])
@@ -582,6 +616,7 @@ class MyRAGTool(Tool):
                     "start_char": 0,
                     "end_char": len(text),
                     "section_title": None,
+                    "is_heading": False,
                 }
             ]
             if stripped

@@ -26,8 +26,12 @@ class DemoEmbedder:
     def encode(self, texts: list[str]) -> list[list[float]]:
         vectors: list[list[float]] = []
         for text in texts:
-            if "RAG" in text or "检索" in text or "知识库" in text:
+            if "RAG 问答" in text or "文档导入" in text or "向量检索" in text:
                 vectors.append([1.0, 0.0, 0.0])
+            elif "RAG" in text or "知识库" in text:
+                vectors.append([0.8, 0.1, 0.0])
+            elif "检索" in text:
+                vectors.append([0.4, 0.4, 0.0])
             elif "记忆" in text or "工作记忆" in text or "语义记忆" in text:
                 vectors.append([0.0, 1.0, 0.0])
             else:

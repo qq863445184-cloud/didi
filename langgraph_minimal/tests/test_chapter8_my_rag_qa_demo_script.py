@@ -12,6 +12,8 @@ def test_chapter8_my_rag_qa_demo_outputs_answer_references_and_trace(tmp_path):
     assert "文档导入" in result.answer
     assert result.references
     assert result.retrieved_chunks
+    assert result.retrieved_chunks[0]["section_title"] == "RAG 问答"
+    assert "文档导入、切块入库、向量检索" in result.retrieved_chunks[0]["content"]
     assert any("RAG 问答" in chunk["content"] for chunk in result.retrieved_chunks)
     assert any("chapter8_rag_note.md#chunk-" in reference for reference in result.references)
     assert [event["stage"] for event in result.trace] == [

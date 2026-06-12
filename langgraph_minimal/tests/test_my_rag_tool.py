@@ -230,6 +230,38 @@ def test_my_rag_tool_keeps_section_metadata_when_chunking_markdown():
     assert all(row["metadata"]["end_char"] is not None for row in rows)
 
 
+def test_my_rag_tool_keeps_markdown_section_together_without_fragment_overlap():
+    tool = build_tool()
+
+    tool.run(
+        {
+            "action": "add_text",
+            "text": "\n\n".join(
+                [
+                    "# 第八章：记忆与检索",
+                    "工作记忆保存当前任务上下文，语义记忆保存稳定知识，情景记忆保存具体事件。",
+                    "## RAG 问答",
+                    "RAG 问答通常包括文档导入、切块入库、向量检索、基于上下文生成答案和展示引用。",
+                ]
+            ),
+            "document_id": "chapter8_note",
+            "namespace": "chapter8",
+            "chunk_size": 64,
+            "chunk_overlap": 8,
+        }
+    )
+
+    contents = [row["metadata"]["content"] for row in tool.vector_store.rows]
+
+    assert any(
+        content.startswith("## RAG 问答")
+        and "文档导入、切块入库、向量检索" in content
+        for content in contents
+    )
+    assert all(not content.startswith("八章：") for content in contents)
+    assert all(not content.startswith("忆保存") for content in contents)
+
+
 def test_my_rag_tool_splits_long_semantic_unit_with_overlap():
     tool = build_tool()
     long_text = "LangGraph" + "审批流程" * 20
