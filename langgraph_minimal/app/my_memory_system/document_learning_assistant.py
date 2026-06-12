@@ -27,6 +27,7 @@ class DocumentLearningAnswer:
 
     answer: str
     references: list[str]
+    retrieved_chunks: list[dict[str, Any]]
     memory_context: str
     trace: list[dict[str, Any]]
     raw_output: str
@@ -96,6 +97,11 @@ class DocumentLearningAssistant:
                 "file_path": str(path),
             },
         )
+        self._sync_loaded_document_memories(
+            document_id=effective_document_id,
+            file_path=path,
+            raw_output=output,
+        )
         self.documents_loaded += 1
         self.current_document = effective_document_id
 
@@ -143,6 +149,7 @@ class DocumentLearningAssistant:
         rag_result = RAGQAResult(
             answer=self._extract_answer(rag_output),
             references=self._extract_references(rag_output),
+            retrieved_chunks=list(self.rag_tool.last_retrieved_chunks),
             trace=list(self.rag_tool.trace_events),
             raw_output=rag_output,
         )
@@ -173,6 +180,7 @@ class DocumentLearningAssistant:
         return DocumentLearningAnswer(
             answer=rag_result.answer,
             references=rag_result.references,
+            retrieved_chunks=rag_result.retrieved_chunks,
             memory_context=memory_context,
             trace=list(self.trace_events),
             raw_output=rag_output,
@@ -221,6 +229,7 @@ class DocumentLearningAssistant:
             return DocumentLearningAnswer(
                 answer=recall_output,
                 references=[],
+                retrieved_chunks=[],
                 memory_context=recall_output,
                 trace=list(self.trace_events),
                 raw_output=recall_output,
@@ -446,6 +455,65 @@ class DocumentLearningAssistant:
                 "perceptual": PerceptualMemoryStore(),
             },
         )
+
+    def _sync_loaded_document_memories(
+        self,
+        *,
+        document_id: str,
+        file_path: Path,
+        raw_output: str,
+    ) -> None:
+        if "perceptual" in self.memory_manager.stores:
+            record = self.memory_manager.add(
+                content=(
+                    f"Document loaded for learning: {document_id}. "
+                    f"Source path: {file_path}."
+                ),
+                memory_type="perceptual",
+                importance=0.65,
+                metadata={
+                    "session_id": self.session_id,
+                    "event_type": "learning_document_perception",
+                    "document_id": document_id,
+                    "file_path": str(file_path),
+                    "namespace": self.namespace,
+                },
+            )
+            self._learning_events.append(
+                {
+                    "stage": "learning.sync_perceptual",
+                    "document_id": document_id,
+                    "memory_id": record.memory_id,
+                }
+            )
+
+        if "semantic" in self.memory_manager.stores:
+            chunks = list(self.rag_tool.last_retrieved_chunks)
+            chunk_hint = ""
+            if chunks:
+                chunk_hint = " ".join(str(chunk.get("content", "")) for chunk in chunks[:2])
+            record = self.memory_manager.add(
+                content=(
+                    f"Document summary for learning: {document_id}. "
+                    f"{chunk_hint or raw_output[:500]}"
+                ),
+                memory_type="semantic",
+                importance=0.7,
+                metadata={
+                    "session_id": self.session_id,
+                    "event_type": "learning_document_summary",
+                    "document_id": document_id,
+                    "file_path": str(file_path),
+                    "namespace": self.namespace,
+                },
+            )
+            self._learning_events.append(
+                {
+                    "stage": "learning.sync_semantic",
+                    "document_id": document_id,
+                    "memory_id": record.memory_id,
+                }
+            )
 
     def _learning_metrics(self) -> dict[str, Any]:
         return {

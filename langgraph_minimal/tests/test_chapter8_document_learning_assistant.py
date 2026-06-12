@@ -2,6 +2,7 @@ from app.my_memory_system import (
     DocumentLearningAssistant,
     MyMemoryManager,
     MyRAGTool,
+    PerceptualMemoryStore,
     WorkingMemoryStore,
 )
 
@@ -58,6 +59,7 @@ def build_assistant():
             "working": WorkingMemoryStore(),
             "episodic": WorkingMemoryStore(),
             "semantic": WorkingMemoryStore(),
+            "perceptual": PerceptualMemoryStore(),
         },
     )
     return DocumentLearningAssistant(
@@ -83,8 +85,12 @@ def test_document_learning_assistant_ingests_document_and_records_learning_event
     assert any(event["stage"] == "rag.add_document" for event in result.trace)
 
     episodic_records = assistant.memory_manager.summary(memory_type="episodic")
+    perceptual_records = assistant.memory_manager.summary(memory_type="perceptual")
+    semantic_records = assistant.memory_manager.summary(memory_type="semantic")
     assert any("加载学习文档" in record.content for record in episodic_records)
     assert episodic_records[0].metadata["session_id"] == "session-1"
+    assert any("Document loaded for learning" in record.content for record in perceptual_records)
+    assert any("Document summary for learning" in record.content for record in semantic_records)
 
 
 def test_document_learning_assistant_asks_with_rag_and_memory_trace(tmp_path):
@@ -100,6 +106,8 @@ def test_document_learning_assistant_asks_with_rag_and_memory_trace(tmp_path):
 
     assert "文档入库" in result.answer
     assert result.references
+    assert result.retrieved_chunks
+    assert "RAG 学习流程" in result.retrieved_chunks[0]["content"]
     assert any(event["stage"] == "rag.ask" for event in result.trace)
     assert any(event["stage"] == "manager.search" for event in result.trace)
     assert any(event["stage"] == "learning.ask" for event in result.trace)
