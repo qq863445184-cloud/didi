@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import os
+import subprocess
 from pathlib import Path
 from typing import Any, Callable
 
@@ -131,6 +134,87 @@ class PaddleOCRVLOCR:
             yield from self._iter_text_values(value.to_dict())
 
 
+class ExternalRuntimeProcessor:
+    """Call a separate Python runtime for heavyweight multimodal inference.
+
+    FunASR/PaddleOCR 经常对 Python 版本和二进制依赖比较敏感。这个适配器把
+    主 Agent 进程和真实 OCR/ASR 推理进程解耦：主进程只通过 JSON 文本交换结果，
+    重模型加载留在 `.venv-asr` 这类专门运行时中完成。
+    """
+
+    def __init__(
+        self,
+        *,
+        action: str,
+        python_path: str | Path,
+        worker_path: str | Path,
+        model_dir: str | Path,
+        timeout_seconds: float = 180.0,
+    ) -> None:
+        self.action = action
+        self.python_path = Path(python_path)
+        self.worker_path = Path(worker_path)
+        self.model_dir = Path(model_dir)
+        self.timeout_seconds = timeout_seconds
+
+    def __call__(self, file_path: str | Path) -> str:
+        path = Path(file_path).expanduser()
+        if not path.exists():
+            raise FileNotFoundError(f"Multimodal input file does not exist: {path}")
+        if not self.python_path.exists():
+            raise FileNotFoundError(f"Multimodal Python runtime does not exist: {self.python_path}")
+        if not self.worker_path.exists():
+            raise FileNotFoundError(f"Multimodal worker script does not exist: {self.worker_path}")
+
+        completed = subprocess.run(
+            [
+                str(self.python_path),
+                str(self.worker_path),
+                self.action,
+                "--file",
+                str(path),
+                "--model-dir",
+                str(self.model_dir),
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=self.timeout_seconds,
+            env=os.environ.copy(),
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise RuntimeError(
+                "External multimodal runtime failed: "
+                f"exit={completed.returncode} stderr={completed.stderr.strip()}"
+            )
+        return self._extract_text(completed.stdout)
+
+    def _extract_text(self, output: str) -> str:
+        stripped = output.strip()
+        if not stripped:
+            return ""
+        last_line = stripped.splitlines()[-1]
+        try:
+            payload = json.loads(last_line)
+        except json.JSONDecodeError:
+            return stripped
+        if isinstance(payload, dict):
+            return str(payload.get("text") or payload.get("result") or "").strip()
+        return str(payload).strip()
+
+
+class ExternalRuntimeASR(ExternalRuntimeProcessor):
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(action="asr", **kwargs)
+
+
+class ExternalRuntimeOCR(ExternalRuntimeProcessor):
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(action="ocr", **kwargs)
+
+
 def build_multimodal_perception_tool(
     *,
     manager: MyMemoryManager | None = None,
@@ -146,6 +230,8 @@ def build_multimodal_perception_tool(
     enable_audio_embedding: bool = True,
     enable_rag: bool = True,
     model_root: str | Path = "models",
+    multimodal_python: str | Path | None = None,
+    multimodal_worker: str | Path | None = None,
     collection_name: str = "chapter8_multimodal_rag",
 ) -> MyPerceptionTool:
     """Build one ready-to-use multimodal perception pipeline.
@@ -166,13 +252,27 @@ def build_multimodal_perception_tool(
 
     resolved_image_ocr = image_ocr
     if resolved_image_ocr is None and enable_ocr:
-        resolved_image_ocr = PaddleOCRVLOCR(
-            model_dir=model_root / "PaddlePaddle" / "PaddleOCR-VL-1.6"
-        )
+        if multimodal_python or multimodal_worker:
+            resolved_image_ocr = ExternalRuntimeOCR(
+                python_path=multimodal_python or Path(".venv-asr") / "Scripts" / "python.exe",
+                worker_path=multimodal_worker or Path("scripts") / "chapter8_multimodal_worker.py",
+                model_dir=model_root / "PaddlePaddle" / "PaddleOCR-VL-1.6",
+            )
+        else:
+            resolved_image_ocr = PaddleOCRVLOCR(
+                model_dir=model_root / "PaddlePaddle" / "PaddleOCR-VL-1.6"
+            )
 
     resolved_audio_asr = audio_asr
     if resolved_audio_asr is None and enable_asr:
-        resolved_audio_asr = SenseVoiceASR(model_dir=model_root / "iic" / "SenseVoiceSmall")
+        if multimodal_python or multimodal_worker:
+            resolved_audio_asr = ExternalRuntimeASR(
+                python_path=multimodal_python or Path(".venv-asr") / "Scripts" / "python.exe",
+                worker_path=multimodal_worker or Path("scripts") / "chapter8_multimodal_worker.py",
+                model_dir=model_root / "iic" / "SenseVoiceSmall",
+            )
+        else:
+            resolved_audio_asr = SenseVoiceASR(model_dir=model_root / "iic" / "SenseVoiceSmall")
 
     encoders: dict[str, Callable[[Path], list[float]]] = {}
     if image_encoder is not None:

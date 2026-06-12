@@ -10,7 +10,13 @@ from .document_store import SQLiteDocumentStore
 from .entity_extraction import SpacyEntityExtractor
 from .models import MemoryRecord, MemorySearchResult
 from .multimodal_encoders import ClapAudioEmbedder, ClipImageEmbedder
-from .multimodal_pipeline import PaddleOCRVLOCR, SenseVoiceASR, build_multimodal_perception_tool
+from .multimodal_pipeline import (
+    ExternalRuntimeASR,
+    ExternalRuntimeOCR,
+    PaddleOCRVLOCR,
+    SenseVoiceASR,
+    build_multimodal_perception_tool,
+)
 from .perception_tool import MyPerceptionTool
 from .pdf_learning_assistant import PDFLearningAssistant
 from .rag_tool import MyRAGTool
@@ -36,6 +42,8 @@ __all__ = [
     "MyRAGTool",
     "ClipImageEmbedder",
     "ClapAudioEmbedder",
+    "ExternalRuntimeASR",
+    "ExternalRuntimeOCR",
     "PaddleOCRVLOCR",
     "SenseVoiceASR",
     "build_multimodal_perception_tool",
