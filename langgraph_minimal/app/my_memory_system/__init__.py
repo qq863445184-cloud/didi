@@ -7,6 +7,7 @@ from .document_learning_assistant import (
 from .document_learning_ui import DocumentLearningUI, build_gradio_app
 from .entity_extraction import SpacyEntityExtractor
 from .models import MemoryRecord, MemorySearchResult
+from .multimodal_encoders import ClapAudioEmbedder, ClipImageEmbedder
 from .perception_tool import MyPerceptionTool
 from .pdf_learning_assistant import PDFLearningAssistant
 from .rag_tool import MyRAGTool
@@ -27,6 +28,8 @@ __all__ = [
     "MyMemoryTool",
     "MyPerceptionTool",
     "MyRAGTool",
+    "ClipImageEmbedder",
+    "ClapAudioEmbedder",
     "PDFLearningAssistant",
     "RAGQADemo",
     "RAGQAResult",
