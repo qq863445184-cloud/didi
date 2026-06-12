@@ -70,16 +70,16 @@ def build_health_report(
                 ),
                 required_files=["model.safetensors", "config.json"],
             ),
-            "clip_image": {
-                "ready": _package_status("transformers")["installed"],
-                "model_name": os.getenv("CLIP_MODEL_NAME", "openai/clip-vit-base-patch32"),
-                "note": "lazy loaded by ClipImageEmbedder",
-            },
-            "clap_audio": {
-                "ready": _package_status("transformers")["installed"] and _package_status("librosa")["installed"],
-                "model_name": os.getenv("CLAP_MODEL_NAME", "laion/clap-htsat-unfused"),
-                "note": "lazy loaded by ClapAudioEmbedder",
-            },
+            "clip_image": _optional_transformers_model_status(
+                os.getenv("CLIP_MODEL_NAME", "openai/clip-vit-base-patch32"),
+                required_packages=["transformers"],
+                note="optional; lazy loaded by ClipImageEmbedder",
+            ),
+            "clap_audio": _optional_transformers_model_status(
+                os.getenv("CLAP_MODEL_NAME", "laion/clap-htsat-unfused"),
+                required_packages=["transformers", "librosa"],
+                note="optional; lazy loaded by ClapAudioEmbedder",
+            ),
         },
         "services": {
             "qdrant": _qdrant_status(check_services=check_services, timeout_seconds=timeout_seconds),
@@ -162,6 +162,44 @@ def _resolve_existing(*paths: Path) -> Path:
         if path.exists():
             return path
     return paths[0]
+
+
+def _optional_transformers_model_status(
+    model_name: str,
+    *,
+    required_packages: list[str],
+    note: str,
+) -> dict[str, Any]:
+    packages = {name: _package_status(name)["installed"] for name in required_packages}
+    package_ready = all(packages.values())
+    status: dict[str, Any] = {
+        "optional": True,
+        "ready": False,
+        "model_name": model_name,
+        "packages": packages,
+        "local_files_only": True,
+        "note": note,
+    }
+    if not package_ready:
+        return status
+
+    path = Path(model_name)
+    if path.exists():
+        status["path"] = str(path)
+        status["ready"] = (path / "config.json").exists()
+        return status
+
+    try:
+        from transformers.utils import cached_file
+
+        cached_path = cached_file(model_name, "config.json", local_files_only=True)
+    except Exception as exc:
+        status["cache_error"] = str(exc)
+        return status
+
+    status["cached_config"] = str(cached_path)
+    status["ready"] = bool(cached_path)
+    return status
 
 
 def _qdrant_status(*, check_services: bool, timeout_seconds: float) -> dict[str, Any]:

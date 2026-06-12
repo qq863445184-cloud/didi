@@ -59,3 +59,18 @@ def test_chapter8_backend_health_accepts_external_multimodal_runtime(tmp_path, m
     assert runtime["packages"]["funasr"]["installed"] is True
     assert runtime["packages"]["paddleocr"]["installed"] is True
     assert report["ready"] is True
+
+
+def test_chapter8_backend_health_reports_clip_clap_as_optional_cache_state(tmp_path, monkeypatch):
+    model_root = tmp_path / "models"
+    (model_root / "all-MiniLM-L6-v2").mkdir(parents=True)
+    (model_root / "all-MiniLM-L6-v2" / "model.safetensors").write_text("x", encoding="utf-8")
+    monkeypatch.setenv("CLIP_MODEL_NAME", str(tmp_path / "missing-clip"))
+    monkeypatch.setenv("CLAP_MODEL_NAME", str(tmp_path / "missing-clap"))
+
+    report = build_health_report(model_root=model_root, check_services=False)
+
+    assert report["models"]["clip_image"]["optional"] is True
+    assert report["models"]["clip_image"]["ready"] is False
+    assert report["models"]["clap_audio"]["optional"] is True
+    assert report["models"]["clap_audio"]["ready"] is False
