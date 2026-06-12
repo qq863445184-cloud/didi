@@ -1,6 +1,54 @@
 from pathlib import Path
 
-from app.my_memory_system import MyMemoryManager, MyPerceptionTool, PerceptualMemoryStore
+from app.my_memory_system import MyMemoryManager, MyPerceptionTool, MyRAGTool, PerceptualMemoryStore
+
+
+class FakeEmbedder:
+    def encode(self, texts):
+        vectors = []
+        for text in texts:
+            if "Qdrant" in text or "Neo4j" in text or "图谱记忆" in text:
+                vectors.append([1.0, 0.0])
+            else:
+                vectors.append([0.0, 1.0])
+        return vectors
+
+
+class FakeVectorStore:
+    def __init__(self) -> None:
+        self.rows = []
+
+    def add_vectors(self, vectors, metadata, ids=None):
+        ids = ids or [str(index) for index in range(len(vectors))]
+        for vector, meta, row_id in zip(vectors, metadata, ids):
+            self.rows.append({"id": row_id, "vector": vector, "metadata": meta})
+        return True
+
+    def search_similar(self, query_vector, limit=5, score_threshold=None, where=None):
+        hits = []
+        for row in self.rows:
+            if where and not all(row["metadata"].get(key) == value for key, value in where.items()):
+                continue
+            score = sum(a * b for a, b in zip(query_vector, row["vector"]))
+            if score_threshold is not None and score < score_threshold:
+                continue
+            hits.append({"id": row["id"], "score": score, "metadata": row["metadata"]})
+        hits.sort(key=lambda item: item["score"], reverse=True)
+        return hits[:limit]
+
+
+class FakeLLM:
+    def invoke(self, messages, **kwargs):
+        return "音频内容提到了 Qdrant 向量检索和 Neo4j 图谱记忆。"
+
+
+def build_fake_rag_tool():
+    return MyRAGTool(
+        embedder=FakeEmbedder(),
+        vector_store=FakeVectorStore(),
+        llm=FakeLLM(),
+        collection_name="perception_rag_test",
+    )
 
 
 def test_perception_tool_ingests_text_file_into_perceptual_memory(tmp_path):
@@ -102,6 +150,36 @@ def test_perception_tool_uses_injected_asr_for_audio_text(tmp_path):
     assert "extractor: audio_asr" in result
     assert "Qdrant" in result
     assert "Found 1 perceptual memories" in search_result
+
+
+def test_perception_tool_syncs_audio_asr_text_to_rag_when_configured(tmp_path):
+    audio = tmp_path / "meeting.mp3"
+    audio.write_bytes(b"fake mp3 bytes")
+    manager = MyMemoryManager(
+        user_id="perception_user",
+        stores={"perceptual": PerceptualMemoryStore()},
+    )
+    rag_tool = build_fake_rag_tool()
+    tool = MyPerceptionTool(
+        manager=manager,
+        rag_tool=rag_tool,
+        rag_namespace="multimodal",
+        audio_asr=lambda path: "会议中讨论了 Qdrant 向量检索和 Neo4j 图谱记忆",
+    )
+
+    ingest_result = tool.run({"action": "ingest_file", "file_path": str(audio)})
+    rag_result = rag_tool.run(
+        {
+            "action": "search",
+            "query": "Qdrant Neo4j 图谱记忆",
+            "namespace": "multimodal",
+        }
+    )
+
+    assert "rag_document_id" in ingest_result
+    assert "搜索结果" in rag_result
+    assert "meeting.mp3" in rag_result
+    assert any(event["stage"] == "perception.sync_rag" for event in tool.trace_events)
 
 
 def test_perception_tool_attaches_modality_embedding_when_encoder_is_injected(tmp_path):

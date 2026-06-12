@@ -41,6 +41,8 @@ class MyPerceptionTool(Tool):
         image_ocr: Callable[[Path], str] | None = None,
         audio_asr: Callable[[Path], str] | None = None,
         encoders: dict[str, Callable[[Path], list[float]]] | None = None,
+        rag_tool: Any | None = None,
+        rag_namespace: str = "perceptual",
     ) -> None:
         super().__init__(
             name="perception",
@@ -55,6 +57,8 @@ class MyPerceptionTool(Tool):
         self.image_ocr = image_ocr or self._build_default_image_ocr()
         self.audio_asr = audio_asr
         self.encoders = encoders or {}
+        self.rag_tool = rag_tool
+        self.rag_namespace = rag_namespace
         self.trace_events: list[dict[str, Any]] = []
         self._call_trace: list[dict[str, Any]] = []
 
@@ -204,6 +208,12 @@ class MyPerceptionTool(Tool):
                 **embedding_meta,
             },
         )
+        rag_document_id = self._sync_extracted_text_to_rag(
+            file_path=file_path,
+            modality=modality,
+            extraction=extraction,
+            description=description,
+        )
 
         lines = [
             "Perceptual memory saved:",
@@ -215,6 +225,8 @@ class MyPerceptionTool(Tool):
         if extraction.get("extracted_text"):
             preview = str(extraction["extracted_text"]).replace("\n", " ")[:120]
             lines.append(f"- extracted_text: {preview}")
+        if rag_document_id:
+            lines.append(f"- rag_document_id: {rag_document_id}")
         if embedding_meta:
             lines.append(f"- embedding_dim: {embedding_meta['embedding_dim']}")
         return "\n".join(lines)
@@ -477,6 +489,63 @@ class MyPerceptionTool(Tool):
             "embedding_dim": len(normalized),
             "embedding_model": f"injected:{modality}",
         }
+
+    def _sync_extracted_text_to_rag(
+        self,
+        *,
+        file_path: Path,
+        modality: str,
+        extraction: dict[str, Any],
+        description: str,
+    ) -> str | None:
+        """Write OCR/ASR/text extraction into RAG when a RAG tool is configured.
+
+        感知记忆保存“看见/听见过什么”，RAG 保存“可被知识问答检索的文本”。
+        只有 extracted_text 非空时才同步，避免把纯文件元数据塞进知识库。
+        """
+
+        if self.rag_tool is None:
+            return None
+        extracted_text = str(extraction.get("extracted_text") or "").strip()
+        if not extracted_text:
+            self._call_trace.append(
+                {
+                    "stage": "perception.skip_rag_sync",
+                    "file_path": str(file_path),
+                    "modality": modality,
+                    "reason": "empty_extracted_text",
+                }
+            )
+            return None
+
+        document_id = f"perceptual:{modality}:{file_path.name}"
+        rag_text_parts = [
+            f"# Perceptual source: {file_path.name}",
+            f"- modality: {modality}",
+            f"- extractor: {extraction.get('extractor', '')}",
+        ]
+        if description:
+            rag_text_parts.append(f"- description: {description}")
+        rag_text_parts.extend(["", extracted_text])
+        result = self.rag_tool.run(
+            {
+                "action": "add_text",
+                "text": "\n".join(rag_text_parts),
+                "document_id": document_id,
+                "namespace": self.rag_namespace,
+            }
+        )
+        self._call_trace.append(
+            {
+                "stage": "perception.sync_rag",
+                "file_path": str(file_path),
+                "modality": modality,
+                "document_id": document_id,
+                "namespace": self.rag_namespace,
+                "result": result,
+            }
+        )
+        return document_id
 
     def _build_content(
         self,
