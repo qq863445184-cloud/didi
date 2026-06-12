@@ -8,6 +8,7 @@ from .document_learning_ui import DocumentLearningUI, build_gradio_app
 from .entity_extraction import SpacyEntityExtractor
 from .models import MemoryRecord, MemorySearchResult
 from .multimodal_encoders import ClapAudioEmbedder, ClipImageEmbedder
+from .multimodal_pipeline import PaddleOCRVLOCR, SenseVoiceASR, build_multimodal_perception_tool
 from .perception_tool import MyPerceptionTool
 from .pdf_learning_assistant import PDFLearningAssistant
 from .rag_tool import MyRAGTool
@@ -30,6 +31,9 @@ __all__ = [
     "MyRAGTool",
     "ClipImageEmbedder",
     "ClapAudioEmbedder",
+    "PaddleOCRVLOCR",
+    "SenseVoiceASR",
+    "build_multimodal_perception_tool",
     "PDFLearningAssistant",
     "RAGQADemo",
     "RAGQAResult",
