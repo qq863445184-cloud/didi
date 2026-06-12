@@ -4,6 +4,7 @@ import argparse
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -38,6 +39,7 @@ def build_health_report(
     root = Path(model_root) if model_root is not None else PROJECT_ROOT / "models"
     embed_model = Path(os.getenv("EMBED_MODEL_NAME") or root / "all-MiniLM-L6-v2")
 
+    multimodal_runtime = _multimodal_runtime_status()
     report = {
         "project_root": str(PROJECT_ROOT),
         "packages": {
@@ -83,6 +85,7 @@ def build_health_report(
             "qdrant": _qdrant_status(check_services=check_services, timeout_seconds=timeout_seconds),
             "neo4j": _neo4j_status(check_services=check_services, timeout_seconds=timeout_seconds),
         },
+        "multimodal_runtime": multimodal_runtime,
     }
     report["ready"] = _overall_ready(report)
     return report
@@ -90,6 +93,51 @@ def build_health_report(
 
 def _package_status(module_name: str) -> dict[str, Any]:
     return {"installed": importlib.util.find_spec(module_name) is not None}
+
+
+def _multimodal_runtime_status() -> dict[str, Any]:
+    """Check an optional external Python used for heavy OCR/ASR dependencies.
+
+    主教程环境可能是 Python 3.13，而 FunASR/PaddleOCR 这类重型多模态依赖
+    更适合放在独立 Python 3.11 环境里。这里仅检查 import 可用性，不加载模型。
+    """
+
+    python_path = os.getenv("MULTIMODAL_PYTHON") or str(PROJECT_ROOT / ".venv-asr" / "Scripts" / "python.exe")
+    path = Path(python_path)
+    status: dict[str, Any] = {
+        "configured": bool(python_path),
+        "python": python_path,
+        "exists": path.exists(),
+        "packages": {
+            "funasr": {"installed": False},
+            "paddleocr": {"installed": False},
+        },
+        "ready": False,
+    }
+    if not path.exists():
+        return status
+
+    for module_name in status["packages"]:
+        status["packages"][module_name] = _external_python_package_status(path, module_name)
+    status["ready"] = all(item["installed"] for item in status["packages"].values())
+    return status
+
+
+def _external_python_package_status(python_path: Path, module_name: str) -> dict[str, Any]:
+    env = os.environ.copy()
+    code = f"import importlib.util; raise SystemExit(0 if importlib.util.find_spec({module_name!r}) else 1)"
+    try:
+        completed = subprocess.run(
+            [str(python_path), "-c", code],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=8,
+            env=env,
+            check=False,
+        )
+        return {"installed": completed.returncode == 0}
+    except Exception as exc:
+        return {"installed": False, "error": str(exc)}
 
 
 def _model_status(
@@ -179,7 +227,15 @@ def _mask_secret(value: str | None) -> str | None:
 
 def _overall_ready(report: dict[str, Any]) -> bool:
     required_models = ["text_embedding", "sensevoice_asr", "paddleocr_vl"]
-    return all(report["models"][name]["ready"] for name in required_models)
+    required_packages = ["markitdown", "spacy", "sentence_transformers", "qdrant_client", "neo4j"]
+    core_ready = all(report["models"][name]["ready"] for name in required_models) and all(
+        report["packages"][name]["installed"] for name in required_packages
+    )
+    heavy_packages_ready = (
+        report["packages"]["funasr"]["installed"]
+        and report["packages"]["paddleocr"]["installed"]
+    ) or report["multimodal_runtime"]["ready"]
+    return bool(core_ready and heavy_packages_ready)
 
 
 def main() -> None:
