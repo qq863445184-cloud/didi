@@ -7,6 +7,7 @@ from app.my_memory_system.multimodal_pipeline import (
     ExternalRuntimeOCR,
     build_multimodal_perception_tool,
 )
+from scripts.chapter8_multimodal_worker import _extract_text
 from scripts.chapter8_multimodal_pipeline_demo import build_sample_files, run_demo
 
 
@@ -135,3 +136,52 @@ def test_build_multimodal_tool_can_use_external_runtime_worker(tmp_path, monkeyp
     assert "extractor: audio_asr" in audio_result
     assert "fake ASR text" in audio_result
     assert len(manager.stores["perceptual"].records) == 2
+
+
+def test_multimodal_worker_extract_text_ignores_non_text_payloads():
+    result = _extract_text(
+        {
+            "text": "Detected text",
+            "image": [[1, 2, 3], [4, 5, 6]],
+            "score": 0.99,
+            "ok": True,
+        }
+    )
+
+    assert result == "Detected text"
+
+
+def test_multimodal_worker_extract_text_ignores_numeric_matrices_without_text():
+    result = _extract_text(
+        {
+            "result": [
+                {"image": [[[200, 120, 80], [200, 120, 80]]]},
+                [[200, 120, 80], [200, 120, 80]],
+                [],
+            ],
+            "layout_labels": ["header", "footer"],
+        }
+    )
+
+    assert result == ""
+
+
+def test_multimodal_worker_extract_text_ignores_unknown_objects():
+    class RichImageResult:
+        def __str__(self):
+            return "huge image matrix [[200 120 80]]"
+
+    assert _extract_text(RichImageResult()) == ""
+
+
+def test_multimodal_worker_extract_text_filters_paths_and_layout_labels():
+    result = _extract_text(
+        [
+            "memory_data\\multimodal_demo\\architecture_diagram.png",
+            "header",
+            "footer_image",
+            "真正识别到的标题文本",
+        ]
+    )
+
+    assert result == "真正识别到的标题文本"

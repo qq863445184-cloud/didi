@@ -4,6 +4,7 @@ import argparse
 import importlib.util
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -88,21 +89,79 @@ def _extract_text(value: Any) -> str:
     if value is None:
         return ""
     if isinstance(value, str):
-        return value.strip()
+        return _clean_text(value)
+    if isinstance(value, (int, float, bool)):
+        return ""
     if isinstance(value, dict):
         parts = []
         for key in ("text", "rec_text", "content", "markdown_text"):
             if isinstance(value.get(key), str):
-                parts.append(value[key])
-        parts.extend(_extract_text(item) for item in value.values())
+                text = value[key].strip()
+                if text:
+                    parts.append(text)
+        if parts:
+            return "\n".join(dict.fromkeys(parts)).strip()
+        for key, item in value.items():
+            if key in {"image", "img", "array", "pixels", "bbox", "box", "score", "ok"}:
+                continue
+            extracted = _extract_text(item)
+            if extracted:
+                parts.append(extracted)
         return "\n".join(part for part in parts if part).strip()
     if isinstance(value, (list, tuple)):
+        if _looks_like_numeric_array(value):
+            return ""
         return "\n".join(part for item in value if (part := _extract_text(item))).strip()
     if hasattr(value, "json"):
         return _extract_text(value.json)
     if hasattr(value, "to_dict"):
         return _extract_text(value.to_dict())
-    return str(value).strip()
+    return ""
+
+
+def _looks_like_numeric_array(value: Any) -> bool:
+    if not isinstance(value, (list, tuple)):
+        return False
+    if not value:
+        return True
+    flattened = _flatten_limited(value, limit=32)
+    if not flattened:
+        return True
+    return all(isinstance(item, (int, float, bool)) for item in flattened)
+
+
+def _flatten_limited(value: Any, *, limit: int) -> list[Any]:
+    items: list[Any] = []
+    stack = [value]
+    while stack and len(items) < limit:
+        current = stack.pop()
+        if isinstance(current, (list, tuple)):
+            stack.extend(reversed(current))
+        else:
+            items.append(current)
+    return items
+
+
+def _clean_text(value: str) -> str:
+    text = value.strip()
+    if not text:
+        return ""
+    layout_labels = {
+        "number",
+        "footnote",
+        "header",
+        "header_image",
+        "footer",
+        "footer_image",
+        "aside_text",
+    }
+    if text.lower() in layout_labels:
+        return ""
+    if re.search(r"[\\/].+\.(png|jpg|jpeg|webp|bmp|gif|wav|mp3|m4a|flac)$", text, re.IGNORECASE):
+        return ""
+    if re.fullmatch(r"[\[\]\d\s.,+-]+", text):
+        return ""
+    return text
 
 
 if __name__ == "__main__":
