@@ -9,6 +9,7 @@ from app.my_memory_system import (
     PDFLearningAssistant,
     PerceptualMemoryStore,
     SemanticMemoryStore,
+    SQLiteDocumentStore,
     SpacyEntityExtractor,
     WorkingMemoryStore,
     build_gradio_app,
@@ -47,6 +48,7 @@ def test_chapter8_memory_layers_are_available():
     assert PerceptualMemoryStore is not None
     assert SpacyEntityExtractor is not None
     assert MyPerceptionTool is not None
+    assert SQLiteDocumentStore is not None
 
 
 def test_chapter8_rag_tool_exposes_document_retrieval_actions():

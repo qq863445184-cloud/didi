@@ -23,6 +23,7 @@ class MyRAGTool(Tool):
         embedder: Any | None = None,
         vector_store: Any | None = None,
         llm: Any | None = None,
+        document_store: Any | None = None,
         collection_name: str = "my_rag_knowledge_base",
         vector_size: int = 384,
     ) -> None:
@@ -37,6 +38,7 @@ class MyRAGTool(Tool):
             vector_size=vector_size,
         )
         self.llm = llm or self._build_default_llm()
+        self.document_store = document_store
         self.trace_events: list[dict[str, Any]] = []
         self.last_retrieved_chunks: list[dict[str, Any]] = []
         self.added_chunks = 0
@@ -123,6 +125,14 @@ class MyRAGTool(Tool):
         if ok is False:
             raise RuntimeError("RAG 向量写入失败")
 
+        self._sync_document_store(
+            document_id=document_id,
+            namespace=namespace,
+            chunks=chunks,
+            ids=ids,
+            parser=str(parameters.get("parser") or "text"),
+            source_path=parameters.get("source_path"),
+        )
         self.added_chunks += len(chunks)
         self.trace_events.append(
             {
@@ -151,6 +161,8 @@ class MyRAGTool(Tool):
             "action": "add_text",
             "text": text,
             "document_id": str(parameters.get("document_id") or file_path.name),
+            "source_path": str(file_path),
+            "parser": parser,
         }
         result = self._add_text(delegated)
         self.trace_events[-1] = {
@@ -163,6 +175,45 @@ class MyRAGTool(Tool):
             f"文档已添加到知识库: {file_path.name}\n"
             f"解析器: {parser}\n"
             f"{result}"
+        )
+
+    def _sync_document_store(
+        self,
+        *,
+        document_id: str,
+        namespace: str,
+        chunks: list[dict[str, Any]],
+        ids: list[str],
+        parser: str,
+        source_path: Any = None,
+    ) -> None:
+        if self.document_store is None:
+            return
+
+        self.document_store.upsert_document(
+            document_id=document_id,
+            namespace=namespace,
+            source_path=str(source_path) if source_path else None,
+            parser=parser,
+            metadata={
+                "collection_name": self.collection_name,
+                "chunk_count": len(chunks),
+            },
+        )
+        self.document_store.replace_chunks(
+            document_id=document_id,
+            namespace=namespace,
+            chunks=[
+                {
+                    "chunk_id": ids[index],
+                    "chunk_index": index,
+                    "content": chunk.get("content", ""),
+                    "section_title": chunk.get("section_title"),
+                    "start_char": chunk.get("start_char"),
+                    "end_char": chunk.get("end_char"),
+                }
+                for index, chunk in enumerate(chunks)
+            ],
         )
 
     def _search(self, parameters: dict[str, Any]) -> str:

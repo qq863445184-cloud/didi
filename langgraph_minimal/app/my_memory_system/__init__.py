@@ -5,6 +5,7 @@ from .document_learning_assistant import (
     DocumentLoadResult,
 )
 from .document_learning_ui import DocumentLearningUI, build_gradio_app
+from .document_store import SQLiteDocumentStore
 from .entity_extraction import SpacyEntityExtractor
 from .models import MemoryRecord, MemorySearchResult
 from .multimodal_encoders import ClapAudioEmbedder, ClipImageEmbedder
@@ -24,6 +25,7 @@ __all__ = [
     "DocumentLearningAssistant",
     "DocumentLoadResult",
     "DocumentLearningUI",
+    "SQLiteDocumentStore",
     "EpisodicMemoryStore",
     "MyMemoryManager",
     "MyMemoryTool",
