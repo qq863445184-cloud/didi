@@ -13,6 +13,7 @@ class RAGQAResult:
 
     answer: str
     references: list[str]
+    retrieved_chunks: list[dict[str, Any]]
     trace: list[dict[str, Any]]
     raw_output: str
 
@@ -95,6 +96,7 @@ class RAGQADemo:
         return RAGQAResult(
             answer=self._extract_answer(output),
             references=self._extract_references(output),
+            retrieved_chunks=list(self.rag_tool.last_retrieved_chunks),
             trace=list(self.rag_tool.trace_events),
             raw_output=output,
         )

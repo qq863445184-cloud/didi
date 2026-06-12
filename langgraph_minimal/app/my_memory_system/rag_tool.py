@@ -38,6 +38,7 @@ class MyRAGTool(Tool):
         )
         self.llm = llm or self._build_default_llm()
         self.trace_events: list[dict[str, Any]] = []
+        self.last_retrieved_chunks: list[dict[str, Any]] = []
         self.added_chunks = 0
 
     def get_parameters(self) -> list[ToolParameter]:
@@ -174,6 +175,7 @@ class MyRAGTool(Tool):
             limit=limit,
             parameters=parameters,
         )
+        self.last_retrieved_chunks = self._format_retrieved_chunks(results)
         candidate_queries = self._last_candidate_query_count(query)
 
         self.trace_events.append(
@@ -209,6 +211,7 @@ class MyRAGTool(Tool):
             limit=limit,
             parameters=parameters,
         )
+        self.last_retrieved_chunks = self._format_retrieved_chunks(results)
 
         if not results:
             return f"未找到与 '{question}' 相关的知识库内容。"
@@ -245,6 +248,24 @@ class MyRAGTool(Tool):
                 f"score={item['score']:.3f}"
             )
         return "\n".join(lines)
+
+    def _format_retrieved_chunks(self, results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Expose retrieved chunk text for demos, debugging, and UI evidence panels."""
+
+        chunks: list[dict[str, Any]] = []
+        for item in results:
+            meta = item.get("metadata", {}) or {}
+            chunks.append(
+                {
+                    "id": item.get("id"),
+                    "score": float(item.get("score", 0.0)),
+                    "document_id": meta.get("document_id"),
+                    "chunk_index": meta.get("chunk_index"),
+                    "section_title": meta.get("section_title"),
+                    "content": meta.get("content", ""),
+                }
+            )
+        return chunks
 
     def _stats(self) -> str:
         return f"RAG collection={self.collection_name}, 当前进程已添加 chunk 数={self.added_chunks}"

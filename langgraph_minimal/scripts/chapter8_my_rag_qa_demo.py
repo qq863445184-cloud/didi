@@ -122,11 +122,20 @@ def main() -> None:
         result = demo.ask(args.question, enable_mqe=True, limit=3)
         print(result.answer)
 
-        print("\n[3] references")
+        print("\n[3] retrieved chunks")
+        for chunk in result.retrieved_chunks:
+            print(
+                f"- document={chunk['document_id']} "
+                f"chunk={chunk['chunk_index']} "
+                f"score={chunk['score']:.3f}"
+            )
+            print(f"  {chunk['content']}")
+
+        print("\n[4] references")
         for reference in result.references:
             print(reference)
 
-        print("\n[4] trace")
+        print("\n[5] trace")
         for event in result.trace:
             print(event)
 

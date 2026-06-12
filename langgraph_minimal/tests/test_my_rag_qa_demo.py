@@ -64,6 +64,9 @@ def test_rag_qa_demo_runs_end_to_end_with_references_and_trace(tmp_path):
     assert "文档导入" in result.answer
     assert result.references
     assert "chapter8.md#chunk-" in result.references[0]
+    assert result.retrieved_chunks
+    assert result.retrieved_chunks[0]["document_id"] == "chapter8.md"
+    assert "RAG 问答流程" in result.retrieved_chunks[0]["content"]
     assert any(event["stage"] == "rag.add_document" for event in result.trace)
     assert any(event["stage"] == "rag.expand_mqe" for event in result.trace)
     assert any(event["stage"] == "rag.ask" for event in result.trace)

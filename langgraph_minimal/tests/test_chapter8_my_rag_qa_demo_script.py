@@ -11,6 +11,8 @@ def test_chapter8_my_rag_qa_demo_outputs_answer_references_and_trace(tmp_path):
     assert "文档已添加到知识库" in ingest_result
     assert "文档导入" in result.answer
     assert result.references
+    assert result.retrieved_chunks
+    assert any("RAG 问答" in chunk["content"] for chunk in result.retrieved_chunks)
     assert any("chapter8_rag_note.md#chunk-" in reference for reference in result.references)
     assert [event["stage"] for event in result.trace] == [
         "rag.add_document",
