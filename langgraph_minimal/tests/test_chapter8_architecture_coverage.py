@@ -1,6 +1,7 @@
 from app.my_memory_system import (
     DocumentLearningAssistant,
     DocumentLearningUI,
+    DocumentParserPipeline,
     EpisodicMemoryStore,
     MyMemoryManager,
     MyMemoryTool,
@@ -49,6 +50,7 @@ def test_chapter8_memory_layers_are_available():
     assert SpacyEntityExtractor is not None
     assert MyPerceptionTool is not None
     assert SQLiteDocumentStore is not None
+    assert DocumentParserPipeline is not None
 
 
 def test_chapter8_rag_tool_exposes_document_retrieval_actions():

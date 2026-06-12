@@ -4,6 +4,7 @@ from .document_learning_assistant import (
     DocumentLearningAssistant,
     DocumentLoadResult,
 )
+from .document_parser import DocumentParserPipeline, ParsedDocument
 from .document_learning_ui import DocumentLearningUI, build_gradio_app
 from .document_store import SQLiteDocumentStore
 from .entity_extraction import SpacyEntityExtractor
@@ -24,6 +25,8 @@ __all__ = [
     "DocumentLearningAnswer",
     "DocumentLearningAssistant",
     "DocumentLoadResult",
+    "DocumentParserPipeline",
+    "ParsedDocument",
     "DocumentLearningUI",
     "SQLiteDocumentStore",
     "EpisodicMemoryStore",
