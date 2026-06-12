@@ -20,6 +20,14 @@ class SQLiteDocumentStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._init_schema()
 
+    def close(self) -> None:
+        """Compatibility hook for demos that clean up temporary SQLite files."""
+
+        # Connections are opened per operation and closed by context managers.
+        # This method gives callers a stable lifecycle hook anyway, especially
+        # on Windows where temporary directory cleanup is sensitive to handles.
+        return None
+
     def upsert_document(
         self,
         *,

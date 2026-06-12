@@ -12,7 +12,14 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from app.my_memory_system import DocumentLearningAssistant, MyMemoryManager, MyRAGTool, WorkingMemoryStore
+from app.my_memory_system import (
+    DocumentLearningAssistant,
+    DocumentParserPipeline,
+    MyMemoryManager,
+    MyRAGTool,
+    SQLiteDocumentStore,
+    WorkingMemoryStore,
+)
 
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -82,11 +89,15 @@ class DemoLLM:
         return "RAG 学习流程包括文档入库、语义检索、基于上下文回答、引用追踪，并把学习过程写入记忆。"
 
 
-def build_demo() -> DocumentLearningAssistant:
+def build_demo(*, workspace_dir: str | Path | None = None) -> DocumentLearningAssistant:
+    workspace = Path(workspace_dir) if workspace_dir is not None else Path(tempfile.mkdtemp())
+    document_store = SQLiteDocumentStore(workspace / "chapter8_learning_docs.sqlite3")
     rag_tool = MyRAGTool(
         embedder=DemoEmbedder(),
         vector_store=DemoVectorStore(),
         llm=DemoLLM(),
+        document_store=document_store,
+        parser_pipeline=DocumentParserPipeline(),
         collection_name="chapter8_document_learning_demo",
     )
     manager = MyMemoryManager(
@@ -129,30 +140,57 @@ def main() -> None:
     parser.add_argument("--note", default="RAG 学习要同时关注知识库证据和学习记忆。")
     args = parser.parse_args()
 
-    assistant = build_demo()
-    with tempfile.TemporaryDirectory() as temp_dir:
-        document_path = build_sample_document(Path(temp_dir))
+    # Windows may keep a just-used SQLite file handle alive for a short moment.
+    # The demo should still exit cleanly after the explicit store lifecycle hook.
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
+        assistant = build_demo(workspace_dir=temp_dir)
+        try:
+            document_path = build_sample_document(Path(temp_dir))
 
-        print("[1] load document")
-        print(assistant.load_document(document_path, chunk_size=48, chunk_overlap=8).raw_output)
+            print("[1] load document")
+            print(assistant.load_document(document_path, chunk_size=48, chunk_overlap=8).raw_output)
 
-        print("\n[2] ask")
-        answer = assistant.ask_auto(args.question, limit=3)
-        print(f"route={answer.route}")
-        print(answer.answer)
+            print("\n[2] ask")
+            answer = assistant.ask_auto(args.question, limit=3)
+            print(f"route={answer.route}")
+            print(answer.answer)
 
-        print("\n[3] add note")
-        print(assistant.add_note(args.note))
+            print("\n[3] retrieved chunks")
+            for chunk in answer.retrieved_chunks:
+                print(
+                    f"- document={chunk['document_id']} "
+                    f"chunk={chunk['chunk_index']} "
+                    f"score={chunk['score']:.3f}"
+                )
+                print(f"  {chunk['content']}")
 
-        print("\n[4] recall")
-        print(assistant.recall(args.note, limit=3))
+            print("\n[4] document store")
+            document = assistant.rag_tool.document_store.get_document(
+                "chapter8_learning_note.md",
+                namespace=assistant.namespace,
+            )
+            chunks = assistant.rag_tool.document_store.list_chunks(
+                "chapter8_learning_note.md",
+                namespace=assistant.namespace,
+            )
+            print(json.dumps({"document": document, "chunks": chunks}, ensure_ascii=False, indent=2))
 
-        print("\n[5] learning report")
-        print(json.dumps(assistant.generate_report(), ensure_ascii=False, indent=2))
+            print("\n[5] add note")
+            print(assistant.add_note(args.note))
 
-        print("\n[6] trace")
-        for event in assistant.trace_events:
-            print(event)
+            print("\n[6] recall")
+            print(assistant.recall(args.note, limit=3))
+
+            print("\n[7] learning report")
+            print(json.dumps(assistant.generate_report(), ensure_ascii=False, indent=2))
+
+            print("\n[8] trace")
+            for event in assistant.trace_events:
+                print(event)
+        finally:
+            close_document_store = getattr(assistant.rag_tool.document_store, "close", None)
+            if close_document_store is not None:
+                close_document_store()
 
 
 if __name__ == "__main__":

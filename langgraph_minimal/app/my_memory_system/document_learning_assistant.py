@@ -62,6 +62,7 @@ class DocumentLearningAssistant:
         self.concepts_learned = 0
         self.current_document: str | None = None
         self._learning_events: list[dict[str, Any]] = []
+        self._last_learning_metrics: dict[str, Any] | None = None
         self.trace_events: list[dict[str, Any]] = []
 
     def load_document(
@@ -359,6 +360,7 @@ class DocumentLearningAssistant:
 
         stats = self.memory_manager.stats()
         stats["learning_metrics"] = self._learning_metrics()
+        self._last_learning_metrics = dict(stats["learning_metrics"])
         self._append_trace(
             {
                 "stage": "learning.stats",
@@ -381,7 +383,7 @@ class DocumentLearningAssistant:
             "title": "学习报告",
             "session_id": self.session_id,
             "namespace": self.namespace,
-            "learning_metrics": self._learning_metrics(),
+            "learning_metrics": dict(self._last_learning_metrics or self._learning_metrics()),
             "memory_summary": {
                 "episodic": [
                     record.content
@@ -431,6 +433,8 @@ class DocumentLearningAssistant:
         return report
 
     def _append_trace(self, event: dict[str, Any]) -> None:
+        if event.get("stage") != "learning.stats":
+            self._last_learning_metrics = None
         self._learning_events.append(event)
         # 每次对外返回 trace 时，把 RAG 与 Memory 的最新事件合并，方便调试认知闭环。
         self.trace_events = [
