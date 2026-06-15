@@ -56,11 +56,11 @@ HTML = """<!doctype html>
 
       <label>问题</label>
       <textarea id="question">Which invoice is tied to the refund request?</textarea>
-      <button type="button" onclick="window.submitDashboardAction('/api/ask', { question: value('question') })">提问</button>
+      <button type="button" onclick="window.askDashboardQuestion()">提问</button>
 
       <label>记忆检索关键词</label>
       <input id="query" value="INV-2026-001 refund request" />
-      <button type="button" onclick="window.submitDashboardAction('/api/recall', { query: value('query') })">检索记忆</button>
+      <button type="button" onclick="window.recallDashboardMemory()">检索记忆</button>
       <button type="button" class="secondary" onclick="window.submitDashboardAction('/api/inventory')">记忆库存</button>
       <button type="button" class="secondary" onclick="window.submitDashboardAction('/api/trace')">Trace</button>
     </section>
@@ -71,6 +71,12 @@ HTML = """<!doctype html>
   </main>
   <script>
     function value(id) { return document.getElementById(id).value; }
+    window.askDashboardQuestion = function() {
+      return window.submitDashboardAction('/api/ask', { question: value('question') });
+    }
+    window.recallDashboardMemory = function() {
+      return window.submitDashboardAction('/api/recall', { query: value('query') });
+    }
     window.submitDashboardAction = async function(url, payload = {}) {
       const output = document.getElementById('output');
       const start = Date.now();
