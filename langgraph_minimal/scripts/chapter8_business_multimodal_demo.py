@@ -64,6 +64,25 @@ class InMemoryVectorStore:
         hits.sort(key=lambda item: item["score"], reverse=True)
         return hits[:limit]
 
+    def delete_vectors(self, ids=None, where=None):
+        """Delete rows either by vector ids or by metadata filter.
+
+        真实 Qdrant 会在删除文档时清理向量索引；本地 demo store 也要遵守
+        同一个契约，否则 SQLite 文档清单已删除但检索仍能召回旧 chunk。
+        """
+
+        before = len(self.rows)
+        id_set = set(ids or [])
+        if id_set:
+            self.rows = [row for row in self.rows if row["id"] not in id_set]
+        elif where:
+            self.rows = [
+                row
+                for row in self.rows
+                if not all(row["metadata"].get(key) == value for key, value in where.items())
+            ]
+        return before - len(self.rows)
+
 
 class InMemoryGraphStore:
     """Tiny graph-store stand-in so the demo never requires a live Neo4j."""

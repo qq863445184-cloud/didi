@@ -132,3 +132,9 @@ def test_memory_rag_dashboard_rag_inventory_handles_missing_document_store():
     dashboard = MemoryRAGDashboard()
 
     assert dashboard.rag_inventory() == "未配置 RAG 文档库，无法查看文档清单。"
+
+
+def test_memory_rag_dashboard_delete_document_requires_rag_tool():
+    dashboard = MemoryRAGDashboard()
+
+    assert dashboard.delete_document("missing.md") == "未配置 RAG 工具，无法删除文档。"

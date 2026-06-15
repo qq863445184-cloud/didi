@@ -69,6 +69,11 @@ HTML = """<!doctype html>
       <label>记忆检索关键词</label>
       <input id="query" value="INV-2026-001 refund request" />
       <button type="button" onclick="window.recallDashboardMemory()">检索记忆</button>
+
+      <label>删除 RAG 文档</label>
+      <input id="documentId" value="perceptual:image:invoice_INV-2026-001.png" />
+      <button type="button" class="secondary" onclick="window.deleteDashboardDocument()">删除文档</button>
+
       <button type="button" class="secondary" onclick="window.submitDashboardAction('/api/inventory')">记忆库存</button>
       <button type="button" class="secondary" onclick="window.submitDashboardAction('/api/rag-inventory')">RAG文档库</button>
       <button type="button" class="secondary" onclick="window.submitDashboardAction('/api/trace')">Trace</button>
@@ -86,6 +91,9 @@ HTML = """<!doctype html>
     }
     window.recallDashboardMemory = function() {
       return window.submitDashboardAction('/api/recall', { query: value('query') });
+    }
+    window.deleteDashboardDocument = function() {
+      return window.submitDashboardAction('/api/delete-document', { document_id: value('documentId') });
     }
     window.submitDashboardAction = async function(url, payload = {}) {
       const output = document.getElementById('output');
@@ -188,6 +196,7 @@ class DashboardHTTPHandler(BaseHTTPRequestHandler):
             "/api/recall": lambda: self.dashboard.recall(form.get("query", "")),
             "/api/inventory": self.dashboard.memory_inventory,
             "/api/rag-inventory": self.dashboard.rag_inventory,
+            "/api/delete-document": lambda: self.dashboard.delete_document(form.get("document_id", "")),
             "/api/trace": self.dashboard.trace,
             "/api/reset": self._reset_dashboard,
         }

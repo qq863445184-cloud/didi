@@ -52,6 +52,22 @@ class MemoryRAGDashboard:
             }
         )
 
+    def delete_document(self, document_id: str | None) -> str:
+        """Delete one RAG document from metadata and retrievable chunks."""
+
+        normalized = (document_id or "").strip()
+        if not normalized:
+            return "请输入要删除的文档 ID。"
+        if self.rag_tool is None:
+            return "未配置 RAG 工具，无法删除文档。"
+        return self.rag_tool.run(
+            {
+                "action": "delete_document",
+                "document_id": normalized,
+                "namespace": self.rag_namespace,
+            }
+        )
+
     def ingest_file(
         self,
         file_path: str | Path | None,
@@ -315,9 +331,15 @@ def build_memory_rag_dashboard_app(dashboard: MemoryRAGDashboard) -> Any:
         with gr.Tab("文档入库"):
             document_file = gr.File(label="上传文档", type="filepath")
             document_output = gr.Textbox(label="入库结果", lines=8)
+            delete_document_id = gr.Textbox(label="删除文档 ID")
             gr.Button("加载文档").click(
                 dashboard.load_document,
                 inputs=document_file,
+                outputs=document_output,
+            )
+            gr.Button("删除文档").click(
+                dashboard.delete_document,
+                inputs=delete_document_id,
                 outputs=document_output,
             )
 

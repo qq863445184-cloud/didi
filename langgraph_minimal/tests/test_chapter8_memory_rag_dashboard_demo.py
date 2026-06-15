@@ -101,3 +101,17 @@ def test_persistent_dashboard_reports_rag_document_inventory(tmp_path):
     )
     assert '"parser": "plain_text"' in inventory
     assert payload["documents"][0]["source_path"] == str(note)
+
+
+def test_persistent_dashboard_can_delete_rag_document(tmp_path):
+    note = tmp_path / "chapter8_rag_note.md"
+    note.write_text("RAG 删除文档时要同步清理 chunk 元数据和向量索引。", encoding="utf-8")
+    dashboard = build_persistent_dashboard_demo(data_dir=tmp_path, strict_backends=False)
+    dashboard.load_document(note)
+
+    delete_output = dashboard.delete_document("chapter8_rag_note.md")
+    payload = json.loads(dashboard.rag_inventory())
+
+    assert "文档已删除: chapter8_rag_note.md" in delete_output
+    assert payload["document_count"] == 0
+    assert "chapter8_rag_note.md" not in dashboard.ask("RAG 删除文档", limit=3)
