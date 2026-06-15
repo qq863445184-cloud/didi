@@ -103,7 +103,7 @@ class MemoryRAGDashboard:
 
         useful_chunks = self._select_useful_chunks(normalized, chunks)
         raw_answer = self._build_grounded_answer(normalized, useful_chunks)
-        evidence = self._format_retrieved_chunks(useful_chunks)
+        evidence = self._format_retrieved_chunks(useful_chunks, question=normalized)
         if not evidence:
             return raw_answer
         return "\n\n".join([raw_answer, "检索证据：", evidence])
@@ -148,10 +148,19 @@ class MemoryRAGDashboard:
             events.extend(list(getattr(source, "trace_events", []) or []))
         return events
 
-    def _format_retrieved_chunks(self, chunks: list[dict[str, Any]]) -> str:
+    def _format_retrieved_chunks(
+        self,
+        chunks: list[dict[str, Any]],
+        *,
+        question: str = "",
+    ) -> str:
         lines: list[str] = []
         for index, chunk in enumerate(chunks, 1):
-            content = str(chunk.get("content", "")).replace("\n", " ")[:240]
+            content = self._clean_chunk_content(
+                str(chunk.get("content", "")),
+                question=question,
+                max_chars=240,
+            )
             lines.append(
                 f"{index}. document={chunk.get('document_id')} "
                 f"chunk={chunk.get('chunk_index')} "
@@ -180,7 +189,7 @@ class MemoryRAGDashboard:
             f"根据检索到的 {len(chunks)} 个高相关片段，可以回答如下：",
         ]
         for index, chunk in enumerate(chunks, 1):
-            content = self._clean_chunk_content(str(chunk.get("content", "")))
+            content = self._clean_chunk_content(str(chunk.get("content", "")), question=question)
             lines.append(
                 f"{index}. {content}"
             )
@@ -226,15 +235,43 @@ class MemoryRAGDashboard:
         candidates = keyword_hits or positive or chunks
         return candidates[:3]
 
-    def _clean_chunk_content(self, content: str, *, max_chars: int = 360) -> str:
+    def _clean_chunk_content(
+        self,
+        content: str,
+        *,
+        question: str = "",
+        max_chars: int = 360,
+    ) -> str:
         raw = content.strip()
         if raw.startswith("# Perceptual source:") and "\n\n" in raw:
             # Perceptual RAG chunks prepend source metadata before extracted text.
             raw = raw.split("\n\n", 1)[1].strip()
+        raw = self._trim_to_question_focus(raw, question)
         normalized = " ".join(raw.split())
         if len(normalized) <= max_chars:
             return normalized
         return f"{normalized[:max_chars].rstrip()}..."
+
+    def _trim_to_question_focus(self, content: str, question: str) -> str:
+        """Trim a chunk to the subsection that directly answers field/list asks."""
+
+        normalized_question = question.strip()
+        if not normalized_question:
+            return content
+        if not any(marker in normalized_question for marker in ("哪些", "包括", "字段")):
+            return content
+
+        anchors = [
+            "统一交互协议可包括",
+            "统一协议字段",
+            "协议字段",
+            "可包括",
+        ]
+        for anchor in anchors:
+            index = content.find(anchor)
+            if index >= 0:
+                return content[index:].lstrip("# \n")
+        return content
 
 
 def build_memory_rag_dashboard_app(dashboard: MemoryRAGDashboard) -> Any:

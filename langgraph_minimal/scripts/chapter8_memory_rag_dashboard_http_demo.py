@@ -63,6 +63,7 @@ HTML = """<!doctype html>
       <button type="button" onclick="window.recallDashboardMemory()">检索记忆</button>
       <button type="button" class="secondary" onclick="window.submitDashboardAction('/api/inventory')">记忆库存</button>
       <button type="button" class="secondary" onclick="window.submitDashboardAction('/api/trace')">Trace</button>
+      <button type="button" class="secondary" onclick="window.submitDashboardAction('/api/reset')">重置当前知识库</button>
     </section>
     <section>
       <h2>输出</h2>
@@ -145,6 +146,7 @@ class DashboardHTTPHandler(BaseHTTPRequestHandler):
             "/api/recall": lambda: self.dashboard.recall(form.get("query", "")),
             "/api/inventory": self.dashboard.memory_inventory,
             "/api/trace": self.dashboard.trace,
+            "/api/reset": self._reset_dashboard,
         }
         action = routes.get(self.path)
         if action is None:
@@ -176,6 +178,17 @@ class DashboardHTTPHandler(BaseHTTPRequestHandler):
             0.9,
         )
         return "\n\n".join([invoice_output, audio_output])
+
+    def _reset_dashboard(self) -> str:
+        """Reset the in-memory demo stack without deleting uploaded files.
+
+        The HTTP demo keeps RAG vectors and memories in process memory.  A reset
+        gives manual testers a clean knowledge base when previous smoke tests or
+        uploads start affecting retrieval results.
+        """
+
+        type(self).dashboard = build_dashboard_demo()
+        return "当前内存知识库已重置。已上传的文件仍保留在 memory_data 目录，需要重新上传/入库后才能再次检索。"
 
     def _handle_upload(self, raw_payload: bytes) -> None:
         content_type = self.headers.get("Content-Type", "")

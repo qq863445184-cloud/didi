@@ -444,10 +444,17 @@ class MyRAGTool(Tool):
             not self._as_bool(parameters.get("enable_mqe"))
             and not self._as_bool(parameters.get("enable_hyde"))
         ):
+            recall_limit = (
+                int(parameters.get("candidate_pool_size"))
+                if parameters.get("candidate_pool_size")
+                else max(limit * 4, limit)
+            )
             results = self._retrieve_once(
                 query=query,
                 namespace=namespace,
-                limit=limit,
+                limit=recall_limit
+                if self._as_bool(parameters.get("enable_keyword_rerank"))
+                else limit,
                 score_threshold=score_threshold,
             )
             return self._maybe_keyword_rerank(
