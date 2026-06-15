@@ -115,8 +115,11 @@ def test_memory_rag_dashboard_answers_protocol_field_questions(tmp_path):
 
     answer_output = dashboard.ask("统一交互协议可包括哪些？", limit=5)
 
+    assert "- task_id：任务标识" in answer_output
+    assert "- context_type：上下文类型" in answer_output
     assert "统一交互协议可包括" in answer_output
     assert "task_id" in answer_output
     assert "data_scope" in answer_output
     assert "stop_condition" in answer_output
+    assert "根据检索到的" not in answer_output
     assert "核心方案" not in answer_output

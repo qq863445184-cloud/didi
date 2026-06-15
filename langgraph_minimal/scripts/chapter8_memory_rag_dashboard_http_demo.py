@@ -27,7 +27,7 @@ HTML = """<!doctype html>
   <style>
     body { margin: 0; font-family: Arial, "Microsoft YaHei", sans-serif; background: #f6f7fb; color: #172033; }
     header { padding: 18px 28px; background: #1f2937; color: #fff; }
-    main { display: grid; grid-template-columns: 360px 1fr; gap: 18px; padding: 18px; }
+    main { display: grid; grid-template-columns: minmax(300px, 360px) minmax(0, 1fr); gap: 18px; padding: 18px; }
     section { background: #fff; border: 1px solid #d8deea; border-radius: 8px; padding: 16px; }
     h1 { margin: 0; font-size: 20px; }
     h2 { margin: 0 0 12px; font-size: 16px; }
@@ -36,8 +36,12 @@ HTML = """<!doctype html>
     textarea { min-height: 78px; resize: vertical; }
     button { margin-top: 12px; margin-right: 8px; padding: 9px 12px; border: 0; border-radius: 6px; background: #2563eb; color: #fff; cursor: pointer; }
     button.secondary { background: #475569; }
-    pre { min-height: 520px; white-space: pre-wrap; overflow: auto; background: #101827; color: #dbeafe; padding: 14px; border-radius: 8px; }
+    pre { min-height: 520px; white-space: pre-wrap; overflow: auto; overflow-wrap: anywhere; background: #101827; color: #dbeafe; padding: 14px; border-radius: 8px; }
     .hint { margin-top: 8px; font-size: 12px; color: #64748b; }
+    @media (max-width: 820px) {
+      main { grid-template-columns: 1fr; padding: 12px; }
+      pre { min-height: 360px; }
+    }
   </style>
 </head>
 <body>
