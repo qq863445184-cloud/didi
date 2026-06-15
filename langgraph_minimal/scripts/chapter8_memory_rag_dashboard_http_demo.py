@@ -50,13 +50,13 @@ HTML = """<!doctype html>
     <section>
       <h2>操作</h2>
       <button type="button" onclick="window.submitDashboardAction('/api/ingest-demo')">导入业务多模态示例</button>
-      <div class="hint">示例会生成发票图片和客服录音占位文件，并通过注入 OCR/ASR 文本入库。</div>
+      <div class="hint">示例会生成发票图片和客服录音占位文件；上传真实文件时会走 OCR/ASR 抽取文本。</div>
 
       <label>上传其他文件</label>
       <input id="uploadFile" type="file" />
       <input id="uploadDescription" value="User uploaded file for memory/RAG demo." />
       <button type="button" onclick="window.uploadDashboardFile()">上传并感知入库</button>
-      <div class="hint">支持文本、Markdown、图片、音频等；图片/音频在本 demo 中使用注入的 OCR/ASR 示例文本。</div>
+      <div class="hint">支持文本、Markdown、图片、音频等；图片/音频会先抽取文本，再同步到 RAG。</div>
 
       <label>问题</label>
       <textarea id="question">Which invoice is tied to the refund request?</textarea>
@@ -125,7 +125,7 @@ HTML = """<!doctype html>
 
 
 class DashboardHTTPHandler(BaseHTTPRequestHandler):
-    dashboard = build_dashboard_demo(prefer_real_llm=True)
+    dashboard = build_dashboard_demo(prefer_real_llm=True, prefer_real_multimodal=True)
     demo_dir = Path("memory_data") / "memory_rag_dashboard_http_demo"
     upload_dir = Path("memory_data") / "memory_rag_dashboard_uploads"
 
@@ -191,7 +191,10 @@ class DashboardHTTPHandler(BaseHTTPRequestHandler):
         uploads start affecting retrieval results.
         """
 
-        type(self).dashboard = build_dashboard_demo(prefer_real_llm=True)
+        type(self).dashboard = build_dashboard_demo(
+            prefer_real_llm=True,
+            prefer_real_multimodal=True,
+        )
         return "当前内存知识库已重置。已上传的文件仍保留在 memory_data 目录，需要重新上传/入库后才能再次检索。"
 
     def _handle_upload(self, raw_payload: bytes) -> None:
