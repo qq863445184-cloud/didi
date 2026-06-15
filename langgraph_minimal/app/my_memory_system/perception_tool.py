@@ -242,8 +242,15 @@ class MyPerceptionTool(Tool):
         if extraction.get("extracted_text"):
             preview = str(extraction["extracted_text"]).replace("\n", " ")[:120]
             lines.append(f"- extracted_text: {preview}")
+        else:
+            lines.append("- extracted_text: <empty>")
+        extraction_error = extraction.get("ocr_error") or extraction.get("asr_error")
+        if extraction_error:
+            lines.append(f"- extraction_error: {extraction_error}")
         if rag_document_id:
             lines.append(f"- rag_document_id: {rag_document_id}")
+        else:
+            lines.append("- rag_sync: skipped (empty extracted_text)")
         if semantic_memory_id:
             lines.append(f"- semantic_memory_id: {semantic_memory_id}")
         if episodic_memory_id:

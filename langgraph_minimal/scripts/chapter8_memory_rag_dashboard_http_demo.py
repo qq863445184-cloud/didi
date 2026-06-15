@@ -4,13 +4,15 @@ import argparse
 import json
 import os
 import sys
+import threading
+import time
 import uuid
 from email.parser import BytesParser
 from email.policy import default
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlparse
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -127,8 +129,22 @@ HTML = """<!doctype html>
         const text = await response.text();
         const elapsed = ((Date.now() - start) / 1000).toFixed(1);
         output.textContent = `[${response.status}] ${elapsed}s\n\n${text}`;
+        const match = text.match(/job_id: ([a-f0-9-]+)/);
+        if (response.ok && match) {
+          window.pollUploadJob(match[1], start);
+        }
       } catch (error) {
         output.textContent = `上传失败：${error.message || error}`;
+      }
+    }
+    window.pollUploadJob = async function(jobId, start) {
+      const output = document.getElementById('output');
+      const response = await fetch(`/api/upload-status?job_id=${encodeURIComponent(jobId)}`);
+      const text = await response.text();
+      const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+      output.textContent = `[${response.status}] ${elapsed}s\n\n${text}`;
+      if (response.ok && text.includes('status: running')) {
+        setTimeout(() => window.pollUploadJob(jobId, start), 2000);
       }
     }
   </script>
@@ -174,10 +190,18 @@ class DashboardHTTPHandler(BaseHTTPRequestHandler):
     dashboard = build_http_dashboard()
     demo_dir = Path("memory_data") / "memory_rag_dashboard_http_demo"
     upload_dir = Path("memory_data") / "memory_rag_dashboard_uploads"
+    upload_jobs: dict[str, dict[str, Any]] = {}
+    upload_jobs_lock = threading.Lock()
 
     def do_GET(self) -> None:
-        if self.path == "/":
+        parsed = urlparse(self.path)
+        if parsed.path == "/":
             self._send(HTML, content_type="text/html; charset=utf-8")
+            return
+        if parsed.path == "/api/upload-status":
+            query = parse_qs(parsed.query)
+            job_id = (query.get("job_id") or [""])[0]
+            self._send(self._format_upload_job(job_id))
             return
         self._send("Not found", status=404)
 
@@ -301,20 +325,111 @@ class DashboardHTTPHandler(BaseHTTPRequestHandler):
         target = self.upload_dir / f"{uuid.uuid4().hex}_{safe_name}"
         target.write_bytes(data)
 
-        result = self.dashboard.ingest_file(
-            target,
-            fields.get("description", ""),
-            float(fields.get("importance", "0.75") or 0.75),
+        job_id = self._start_upload_job(
+            target=target,
+            description=fields.get("description", ""),
+            importance=float(fields.get("importance", "0.75") or 0.75),
         )
         self._send(
             "\n".join(
                 [
                     f"Uploaded file saved: {target}",
+                    f"job_id: {job_id}",
+                    "status: running",
+                    "后台正在执行感知入库；页面会自动刷新任务状态。",
                     "",
-                    result,
+                    "如果是图片/音频，OCR/ASR 可能需要较长时间。即使抽取超时，文件也会保留为感知记忆元数据。",
                 ]
             )
         )
+
+    def _start_upload_job(self, *, target: Path, description: str, importance: float) -> str:
+        job_id = uuid.uuid4().hex
+        self._set_upload_job(
+            job_id,
+            {
+                "status": "running",
+                "file_path": str(target),
+                "description": description,
+                "importance": importance,
+                "created_at": time.time(),
+                "updated_at": time.time(),
+                "result": "",
+                "error": "",
+            },
+        )
+        worker = threading.Thread(
+            target=self._run_upload_job,
+            args=(job_id, target, description, importance),
+            daemon=True,
+        )
+        worker.start()
+        return job_id
+
+    def _run_upload_job(
+        self,
+        job_id: str,
+        target: Path,
+        description: str,
+        importance: float,
+    ) -> None:
+        try:
+            result = self.dashboard.ingest_file(target, description, importance)
+        except Exception as exc:
+            self._update_upload_job(
+                job_id,
+                status="failed",
+                error=str(exc),
+                updated_at=time.time(),
+            )
+            return
+
+        status = "failed" if result.startswith("Error:") else "completed"
+        self._update_upload_job(
+            job_id,
+            status=status,
+            result=result,
+            updated_at=time.time(),
+        )
+
+    @classmethod
+    def _set_upload_job(cls, job_id: str, payload: dict[str, Any]) -> None:
+        with cls.upload_jobs_lock:
+            cls.upload_jobs[job_id] = payload
+
+    @classmethod
+    def _update_upload_job(cls, job_id: str, **updates: Any) -> None:
+        with cls.upload_jobs_lock:
+            job = cls.upload_jobs.setdefault(job_id, {})
+            job.update(updates)
+
+    @classmethod
+    def _get_upload_job(cls, job_id: str) -> dict[str, Any] | None:
+        with cls.upload_jobs_lock:
+            job = cls.upload_jobs.get(job_id)
+            return dict(job) if job is not None else None
+
+    def _format_upload_job(self, job_id: str) -> str:
+        if not job_id:
+            return "Error: missing job_id"
+        job = self._get_upload_job(job_id)
+        if job is None:
+            return f"Error: upload job not found: {job_id}"
+
+        elapsed = max(0.0, time.time() - float(job.get("created_at", time.time())))
+        lines = [
+            f"job_id: {job_id}",
+            f"status: {job.get('status', 'unknown')}",
+            f"elapsed_seconds: {elapsed:.1f}",
+            f"file_path: {job.get('file_path', '')}",
+        ]
+        if job.get("status") == "running":
+            lines.append("后台正在执行 OCR/ASR 与感知入库，请稍候。")
+        if job.get("result"):
+            lines.extend(["", str(job["result"])])
+        if job.get("error"):
+            lines.extend(["", f"Error: {job['error']}"])
+        return "\n".join(lines)
 
     def _safe_filename(self, filename: str) -> str:
         keep = []

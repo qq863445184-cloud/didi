@@ -175,6 +175,42 @@ def test_perception_tool_uses_injected_ocr_for_image_text(tmp_path):
     assert "订单金额" in search_result
 
 
+def test_perception_tool_reports_ocr_failure_and_skips_rag_sync(tmp_path):
+    image = tmp_path / "slow_ocr.png"
+    image.write_bytes(b"fake image bytes")
+    manager = MyMemoryManager(
+        user_id="perception_user",
+        stores={"perceptual": PerceptualMemoryStore()},
+    )
+
+    class SpyRAGTool:
+        def __init__(self):
+            self.calls = []
+
+        def run(self, parameters):
+            self.calls.append(parameters)
+            return "unexpected rag call"
+
+    rag_tool = SpyRAGTool()
+
+    def timeout_ocr(path):
+        raise TimeoutError("OCR worker timed out after 1.0 seconds")
+
+    tool = MyPerceptionTool(
+        manager=manager,
+        rag_tool=rag_tool,
+        image_ocr=timeout_ocr,
+    )
+
+    result = tool.run({"action": "ingest_file", "file_path": str(image)})
+
+    assert "Perceptual memory saved" in result
+    assert "extraction_error: OCR worker timed out" in result
+    assert "rag_sync: skipped (empty extracted_text)" in result
+    assert not rag_tool.calls
+    assert any(event["stage"] == "perception.skip_rag_sync" for event in tool.trace_events)
+
+
 def test_perception_tool_uses_injected_asr_for_audio_text(tmp_path):
     audio = tmp_path / "meeting.wav"
     audio.write_bytes(b"fake wav bytes")

@@ -232,6 +232,7 @@ def build_multimodal_perception_tool(
     model_root: str | Path = "models",
     multimodal_python: str | Path | None = None,
     multimodal_worker: str | Path | None = None,
+    external_timeout_seconds: float = 180.0,
     collection_name: str = "chapter8_multimodal_rag",
 ) -> MyPerceptionTool:
     """Build one ready-to-use multimodal perception pipeline.
@@ -257,6 +258,7 @@ def build_multimodal_perception_tool(
                 python_path=multimodal_python or Path(".venv-asr") / "Scripts" / "python.exe",
                 worker_path=multimodal_worker or Path("scripts") / "chapter8_multimodal_worker.py",
                 model_dir=model_root / "PaddlePaddle" / "PaddleOCR-VL-1.6",
+                timeout_seconds=external_timeout_seconds,
             )
         else:
             resolved_image_ocr = PaddleOCRVLOCR(
@@ -270,6 +272,7 @@ def build_multimodal_perception_tool(
                 python_path=multimodal_python or Path(".venv-asr") / "Scripts" / "python.exe",
                 worker_path=multimodal_worker or Path("scripts") / "chapter8_multimodal_worker.py",
                 model_dir=model_root / "iic" / "SenseVoiceSmall",
+                timeout_seconds=external_timeout_seconds,
             )
         else:
             resolved_audio_asr = SenseVoiceASR(model_dir=model_root / "iic" / "SenseVoiceSmall")

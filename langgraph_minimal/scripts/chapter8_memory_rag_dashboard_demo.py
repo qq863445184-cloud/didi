@@ -157,6 +157,7 @@ def build_persistent_dashboard_demo(
         model_root=ROOT / "models",
         multimodal_python=_external_multimodal_python(),
         multimodal_worker=_external_multimodal_worker(),
+        external_timeout_seconds=_dashboard_multimodal_timeout(),
         collection_name="chapter8_persistent_perceptual",
     )
     return MemoryRAGDashboard(
@@ -212,6 +213,7 @@ def _build_real_multimodal_dashboard(
         model_root=ROOT / "models",
         multimodal_python=external_python if use_external_runtime else None,
         multimodal_worker=external_worker if use_external_runtime else None,
+        external_timeout_seconds=_dashboard_multimodal_timeout(),
         collection_name="chapter8_dashboard_multimodal",
     )
     return MemoryRAGDashboard(
@@ -294,6 +296,16 @@ def _external_multimodal_worker() -> Path | None:
     return path if path.exists() else None
 
 
+def _dashboard_multimodal_timeout() -> float:
+    """Timeout for browser-triggered OCR/ASR jobs.
+
+    上传页面会把真实 OCR/ASR 放到后台执行。这里仍保留超时，避免单个
+    worker 长时间占用资源；需要测试冷启动重模型时可通过环境变量调大。
+    """
+
+    return float(os.getenv("CHAPTER8_DASHBOARD_MULTIMODAL_TIMEOUT", "180"))
+
+
 def _real_image_ocr(path: Path) -> str:
     from app.my_memory_system.multimodal_pipeline import ExternalRuntimeOCR, PaddleOCRVLOCR
 
@@ -304,6 +316,7 @@ def _real_image_ocr(path: Path) -> str:
             python_path=external_python,
             worker_path=external_worker,
             model_dir=ROOT / "models" / "PaddlePaddle" / "PaddleOCR-VL-1.6",
+            timeout_seconds=_dashboard_multimodal_timeout(),
         )
     else:
         processor = PaddleOCRVLOCR(
@@ -322,6 +335,7 @@ def _real_audio_asr(path: Path) -> str:
             python_path=external_python,
             worker_path=external_worker,
             model_dir=ROOT / "models" / "iic" / "SenseVoiceSmall",
+            timeout_seconds=_dashboard_multimodal_timeout(),
         )
     else:
         processor = SenseVoiceASR(model_dir=ROOT / "models" / "iic" / "SenseVoiceSmall")

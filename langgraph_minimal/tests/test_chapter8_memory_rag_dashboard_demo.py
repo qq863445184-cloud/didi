@@ -4,7 +4,10 @@ from scripts.chapter8_memory_rag_dashboard_demo import (
     build_dashboard_demo,
     build_persistent_dashboard_demo,
 )
-from scripts.chapter8_memory_rag_dashboard_http_demo import build_http_dashboard
+from scripts.chapter8_memory_rag_dashboard_http_demo import (
+    DashboardHTTPHandler,
+    build_http_dashboard,
+)
 
 
 def test_build_dashboard_demo_wires_business_multimodal_stack():
@@ -115,3 +118,32 @@ def test_persistent_dashboard_can_delete_rag_document(tmp_path):
     assert "文档已删除: chapter8_rag_note.md" in delete_output
     assert payload["document_count"] == 0
     assert "chapter8_rag_note.md" not in dashboard.ask("RAG 删除文档", limit=3)
+
+
+def test_http_upload_job_status_formats_running_and_completed_states(tmp_path):
+    handler = DashboardHTTPHandler.__new__(DashboardHTTPHandler)
+    job_id = "abc123"
+    DashboardHTTPHandler._set_upload_job(
+        job_id,
+        {
+            "status": "running",
+            "file_path": str(tmp_path / "upload.png"),
+            "created_at": 100.0,
+            "updated_at": 100.0,
+            "result": "",
+            "error": "",
+        },
+    )
+
+    running = handler._format_upload_job(job_id)
+    DashboardHTTPHandler._update_upload_job(
+        job_id,
+        status="completed",
+        result="Perceptual memory saved:\n- rag_sync: skipped (empty extracted_text)",
+    )
+    completed = handler._format_upload_job(job_id)
+
+    assert "status: running" in running
+    assert "后台正在执行 OCR/ASR" in running
+    assert "status: completed" in completed
+    assert "Perceptual memory saved" in completed
