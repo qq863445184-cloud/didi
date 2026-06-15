@@ -75,6 +75,11 @@ class AdvancedFakeLLM:
         return "基于增强检索得到答案。"
 
 
+class FlatFakeEmbedder:
+    def encode(self, texts):
+        return [[1.0] for _ in texts]
+
+
 def build_tool(llm=None):
     return MyRAGTool(
         embedder=FakeEmbedder(),
@@ -90,6 +95,15 @@ def build_advanced_tool(llm=None):
         vector_store=FakeVectorStore(),
         llm=llm or AdvancedFakeLLM(),
         collection_name="test_rag_advanced",
+    )
+
+
+def build_flat_tool(llm=None):
+    return MyRAGTool(
+        embedder=FlatFakeEmbedder(),
+        vector_store=FakeVectorStore(),
+        llm=llm or FakeLLM(),
+        collection_name="test_rag_flat",
     )
 
 
@@ -342,6 +356,41 @@ def test_my_rag_tool_hyde_retrieves_from_hypothetical_answer():
     assert "搜索结果" in result
     assert "hyde_doc" in result
     assert any(event["stage"] == "rag.expand_hyde" for event in tool.trace_events)
+
+
+def test_my_rag_tool_keyword_rerank_promotes_exact_business_terms():
+    tool = build_flat_tool()
+    tool.run(
+        {
+            "action": "add_text",
+            "text": "通用退款流程要求客服先确认客户身份，再创建售后工单。",
+            "document_id": "refund_policy",
+            "namespace": "business",
+        }
+    )
+    tool.run(
+        {
+            "action": "add_text",
+            "text": "财务记录：发票 INV-2026-001 的金额为 1280 CNY，需要关联订单 ORD-2026-778。",
+            "document_id": "invoice_record",
+            "namespace": "business",
+        }
+    )
+
+    result = tool.run(
+        {
+            "action": "search",
+            "query": "发票 INV-2026-001 金额",
+            "namespace": "business",
+            "limit": 2,
+            "enable_keyword_rerank": True,
+        }
+    )
+
+    assert "invoice_record" in result
+    assert tool.last_retrieved_chunks[0]["document_id"] == "invoice_record"
+    assert tool.last_retrieved_chunks[0]["keyword_score"] > 0
+    assert any(event["stage"] == "rag.keyword_rerank" for event in tool.trace_events)
 
 
 def test_my_rag_tool_score_threshold_filters_low_scores():

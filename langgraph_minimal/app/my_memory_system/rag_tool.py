@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from time import time
 from typing import Any
@@ -61,6 +62,8 @@ class MyRAGTool(Tool):
             ToolParameter(name="chunk_overlap", type="integer", description="相邻块重叠字符数", required=False, default=100),
             ToolParameter(name="enable_mqe", type="boolean", description="是否启用多查询扩展检索", required=False, default=False),
             ToolParameter(name="enable_hyde", type="boolean", description="是否启用 HyDE 假设答案检索", required=False, default=False),
+            ToolParameter(name="enable_keyword_rerank", type="boolean", description="是否启用关键词二阶段重排", required=False, default=False),
+            ToolParameter(name="keyword_weight", type="number", description="关键词重排分数权重", required=False, default=0.2),
             ToolParameter(name="score_threshold", type="number", description="最低相似度阈值", required=False),
             ToolParameter(name="candidate_pool_size", type="integer", description="每个候选查询的召回池大小", required=False),
         ]
@@ -402,6 +405,8 @@ class MyRAGTool(Tool):
                 {
                     "id": item.get("id"),
                     "score": float(item.get("score", 0.0)),
+                    "vector_score": float(item.get("vector_score", item.get("score", 0.0))),
+                    "keyword_score": float(item.get("keyword_score", 0.0)),
                     "document_id": meta.get("document_id"),
                     "chunk_index": meta.get("chunk_index"),
                     "section_title": meta.get("section_title"),
@@ -439,11 +444,17 @@ class MyRAGTool(Tool):
             not self._as_bool(parameters.get("enable_mqe"))
             and not self._as_bool(parameters.get("enable_hyde"))
         ):
-            return self._retrieve_once(
+            results = self._retrieve_once(
                 query=query,
                 namespace=namespace,
                 limit=limit,
                 score_threshold=score_threshold,
+            )
+            return self._maybe_keyword_rerank(
+                query=query,
+                results=results,
+                limit=limit,
+                parameters=parameters,
             )
 
         pool_size = int(parameters.get("candidate_pool_size") or max(limit * 2, limit))
@@ -470,7 +481,12 @@ class MyRAGTool(Tool):
                 "score_threshold": score_threshold,
             }
         )
-        return merged[:limit]
+        return self._maybe_keyword_rerank(
+            query=query,
+            results=merged,
+            limit=limit,
+            parameters=parameters,
+        )
 
     def _last_candidate_query_count(self, query: str) -> int:
         if not self.trace_events:
@@ -595,6 +611,78 @@ class MyRAGTool(Tool):
         merged = list(by_key.values())
         merged.sort(key=lambda item: item["score"], reverse=True)
         return merged
+
+    def _maybe_keyword_rerank(
+        self,
+        *,
+        query: str,
+        results: list[dict[str, Any]],
+        limit: int,
+        parameters: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        if not self._as_bool(parameters.get("enable_keyword_rerank")):
+            return results[:limit]
+        weight = float(parameters.get("keyword_weight", 0.2))
+        reranked = self._keyword_rerank(query=query, results=results, weight=weight)
+        self.trace_events.append(
+            {
+                "stage": "rag.keyword_rerank",
+                "query": query,
+                "candidates": len(results),
+                "keyword_weight": weight,
+            }
+        )
+        return reranked[:limit]
+
+    def _keyword_rerank(
+        self,
+        *,
+        query: str,
+        results: list[dict[str, Any]],
+        weight: float,
+    ) -> list[dict[str, Any]]:
+        query_terms = self._keyword_terms(query)
+        reranked: list[dict[str, Any]] = []
+        for item in results:
+            meta = item.get("metadata", {}) or {}
+            content = str(meta.get("content", ""))
+            keyword_score = float(len(query_terms & self._keyword_terms(content)))
+            vector_score = float(item.get("vector_score", item.get("score", 0.0)))
+            reranked.append(
+                {
+                    **item,
+                    "vector_score": vector_score,
+                    "keyword_score": keyword_score,
+                    "score": vector_score + keyword_score * weight,
+                }
+            )
+        reranked.sort(
+            key=lambda item: (
+                item.get("score", 0.0),
+                item.get("keyword_score", 0.0),
+                item.get("vector_score", 0.0),
+            ),
+            reverse=True,
+        )
+        return reranked
+
+    def _keyword_terms(self, text: str) -> set[str]:
+        """Extract explainable rerank terms from mixed Chinese/English text.
+
+        这个重排不是替代 embedding，而是补足业务检索里常见的精确标识符：
+        发票号、订单号、金额字段等一旦命中，就应该在向量候选中更靠前。
+        """
+
+        normalized = text.lower()
+        raw_terms = re.findall(r"[a-z0-9][a-z0-9_-]*|[\u4e00-\u9fff]+", normalized)
+        terms: set[str] = set()
+        for term in raw_terms:
+            if not term:
+                continue
+            terms.add(term)
+            if re.fullmatch(r"[\u4e00-\u9fff]+", term):
+                terms.update(term[index : index + 2] for index in range(max(0, len(term) - 1)))
+        return terms
 
     def _as_bool(self, value: Any) -> bool:
         if isinstance(value, bool):
