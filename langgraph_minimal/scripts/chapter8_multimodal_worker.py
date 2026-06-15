@@ -70,11 +70,11 @@ def run_ocr(file_path: Path, model_dir: Path) -> str:
 
     model = PaddleOCRVL(
         pipeline_version="v1.6",
-        vl_rec_model_dir=str(model_dir),
+        vl_rec_model_dir=str(model_dir.resolve()),
         use_doc_orientation_classify=False,
         use_doc_unwarping=False,
     )
-    result = model.predict(str(file_path))
+    result = model.predict(str(file_path.resolve()))
     return _extract_text(result)
 
 
@@ -92,9 +92,16 @@ def _extract_text(value: Any) -> str:
         return _clean_text(value)
     if isinstance(value, (int, float, bool)):
         return ""
+    if hasattr(value, "markdown"):
+        extracted = _extract_text(value.markdown)
+        if extracted:
+            return extracted
     if isinstance(value, dict):
         parts = []
-        for key in ("text", "rec_text", "content", "markdown_text"):
+        # PaddleOCR-VL puts the final readable document in markdown.markdown_texts.
+        # Individual layout blocks keep their OCR result in block_content; block_label
+        # is only a category name such as "text" or "image" and must not be indexed.
+        for key in ("markdown_texts", "markdown_text", "text", "rec_text", "content", "block_content"):
             if isinstance(value.get(key), str):
                 text = value[key].strip()
                 if text:
@@ -102,7 +109,19 @@ def _extract_text(value: Any) -> str:
         if parts:
             return "\n".join(dict.fromkeys(parts)).strip()
         for key, item in value.items():
-            if key in {"image", "img", "array", "pixels", "bbox", "box", "score", "ok"}:
+            if key in {
+                "image",
+                "img",
+                "array",
+                "pixels",
+                "bbox",
+                "box",
+                "score",
+                "ok",
+                "block_label",
+                "block_bbox",
+                "block_polygon_points",
+            }:
                 continue
             extracted = _extract_text(item)
             if extracted:

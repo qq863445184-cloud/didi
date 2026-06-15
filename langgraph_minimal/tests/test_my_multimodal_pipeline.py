@@ -185,3 +185,38 @@ def test_multimodal_worker_extract_text_filters_paths_and_layout_labels():
     )
 
     assert result == "真正识别到的标题文本"
+
+
+def test_multimodal_worker_extract_text_prefers_paddleocr_markdown():
+    class PaddleOCRVLResult(dict):
+        @property
+        def markdown(self):
+            return {"markdown_texts": "## 发票\n\n总金额：1280 CNY"}
+
+        @property
+        def json(self):
+            return {
+                "res": {
+                    "parsing_res_list": [
+                        {"block_label": "text", "block_content": "备用正文"},
+                    ]
+                }
+            }
+
+    assert _extract_text([PaddleOCRVLResult()]) == "## 发票\n\n总金额：1280 CNY"
+
+
+def test_multimodal_worker_extract_text_reads_block_content_not_labels():
+    result = _extract_text(
+        {
+            "res": {
+                "parsing_res_list": [
+                    {"block_label": "paragraph_title", "block_content": "低功耗方案"},
+                    {"block_label": "text", "block_content": "自动收取绿色能量"},
+                    {"block_label": "image", "block_content": ""},
+                ]
+            }
+        }
+    )
+
+    assert result == "低功耗方案\n自动收取绿色能量"

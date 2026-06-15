@@ -84,7 +84,7 @@ class PaddleOCRVLOCR:
         if not path.exists():
             raise FileNotFoundError(f"Image file does not exist: {path}")
         model = self._ensure_model()
-        result = model.predict(str(path))
+        result = model.predict(str(path.resolve()))
         return self._extract_text(result)
 
     def _ensure_model(self) -> Any:
@@ -98,7 +98,7 @@ class PaddleOCRVLOCR:
         # 显式传本地目录，避免 PaddleOCR 默认去用户目录重新下载模型。
         return PaddleOCRVL(
             pipeline_version=pipeline_version,
-            vl_rec_model_dir=str(model_dir),
+            vl_rec_model_dir=str(model_dir.resolve()),
             use_doc_orientation_classify=False,
             use_doc_unwarping=False,
         )
@@ -115,12 +115,33 @@ class PaddleOCRVLOCR:
             if stripped:
                 yield stripped
             return
+        if hasattr(value, "markdown"):
+            yield from self._iter_text_values(value.markdown)
+            return
         if isinstance(value, dict):
-            for key in ("text", "rec_text", "content", "markdown_text"):
+            # PaddleOCR-VL 的最终可读文本通常在 markdown.markdown_texts；
+            # json.parsing_res_list 里每个块的真实识别内容在 block_content。
+            # block_label 只是版面类别名，不能作为记忆/RAG 正文。
+            for key in ("markdown_texts", "markdown_text", "text", "rec_text", "content", "block_content"):
                 text = value.get(key)
                 if isinstance(text, str) and text.strip():
                     yield text.strip()
-            for item in value.values():
+            ignored_keys = {
+                "image",
+                "img",
+                "array",
+                "pixels",
+                "bbox",
+                "box",
+                "score",
+                "ok",
+                "block_label",
+                "block_bbox",
+                "block_polygon_points",
+            }
+            for key, item in value.items():
+                if key in ignored_keys:
+                    continue
                 yield from self._iter_text_values(item)
             return
         if isinstance(value, (list, tuple)):

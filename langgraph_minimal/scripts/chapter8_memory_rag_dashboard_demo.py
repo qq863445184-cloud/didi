@@ -148,14 +148,13 @@ def build_persistent_dashboard_demo(
         manager=manager,
         rag_tool=rag_tool,
         rag_namespace="business_multimodal",
-        image_ocr=image_ocr,
-        audio_asr=audio_asr,
+        image_ocr=image_ocr or (_real_image_ocr if prefer_real_multimodal else None),
+        audio_asr=audio_asr or (_real_audio_asr if prefer_real_multimodal else None),
         enable_ocr=prefer_real_multimodal,
         enable_asr=prefer_real_multimodal,
         enable_image_embedding=False,
         enable_audio_embedding=False,
         model_root=ROOT / "models",
-        multimodal_python=_external_multimodal_python(),
         multimodal_worker=_external_multimodal_worker(),
         external_timeout_seconds=_dashboard_multimodal_timeout(),
         collection_name="chapter8_persistent_perceptual",
@@ -197,21 +196,19 @@ def _build_real_multimodal_dashboard(
             "episodic": EpisodicMemoryStore(graph_store=InMemoryGraphStore()),
         },
     )
-    external_python = ROOT / ".venv-asr" / "Scripts" / "python.exe"
     external_worker = ROOT / "scripts" / "chapter8_multimodal_worker.py"
-    use_external_runtime = external_python.exists() and external_worker.exists()
+    use_external_runtime = external_worker.exists()
     perception_tool = build_multimodal_perception_tool(
         manager=manager,
         rag_tool=rag_tool,
         rag_namespace="business_multimodal",
-        image_ocr=image_ocr,
-        audio_asr=audio_asr,
+        image_ocr=image_ocr or _real_image_ocr,
+        audio_asr=audio_asr or _real_audio_asr,
         enable_ocr=True,
         enable_asr=True,
         enable_image_embedding=False,
         enable_audio_embedding=False,
         model_root=ROOT / "models",
-        multimodal_python=external_python if use_external_runtime else None,
         multimodal_worker=external_worker if use_external_runtime else None,
         external_timeout_seconds=_dashboard_multimodal_timeout(),
         collection_name="chapter8_dashboard_multimodal",
@@ -287,8 +284,30 @@ def _build_document_parser_pipeline(
 
 
 def _external_multimodal_python() -> Path | None:
-    path = ROOT / ".venv-asr" / "Scripts" / "python.exe"
-    return path if path.exists() else None
+    return _external_runtime_python(
+        "CHAPTER8_DASHBOARD_MULTIMODAL_PYTHON",
+        ROOT / ".venv-asr" / "Scripts" / "python.exe",
+    )
+
+
+def _external_ocr_python() -> Path | None:
+    return _external_runtime_python(
+        "CHAPTER8_DASHBOARD_OCR_PYTHON",
+        _external_multimodal_python(),
+    )
+
+
+def _external_asr_python() -> Path | None:
+    return _external_runtime_python(
+        "CHAPTER8_DASHBOARD_ASR_PYTHON",
+        _external_multimodal_python(),
+    )
+
+
+def _external_runtime_python(env_name: str, default_path: Path | None) -> Path | None:
+    raw_path = os.getenv(env_name)
+    path = Path(raw_path).expanduser() if raw_path else default_path
+    return path if path is not None and path.exists() else None
 
 
 def _external_multimodal_worker() -> Path | None:
@@ -309,7 +328,7 @@ def _dashboard_multimodal_timeout() -> float:
 def _real_image_ocr(path: Path) -> str:
     from app.my_memory_system.multimodal_pipeline import ExternalRuntimeOCR, PaddleOCRVLOCR
 
-    external_python = _external_multimodal_python()
+    external_python = _external_ocr_python()
     external_worker = _external_multimodal_worker()
     if external_python is not None and external_worker is not None:
         processor = ExternalRuntimeOCR(
@@ -328,7 +347,7 @@ def _real_image_ocr(path: Path) -> str:
 def _real_audio_asr(path: Path) -> str:
     from app.my_memory_system.multimodal_pipeline import ExternalRuntimeASR, SenseVoiceASR
 
-    external_python = _external_multimodal_python()
+    external_python = _external_asr_python()
     external_worker = _external_multimodal_worker()
     if external_python is not None and external_worker is not None:
         processor = ExternalRuntimeASR(
