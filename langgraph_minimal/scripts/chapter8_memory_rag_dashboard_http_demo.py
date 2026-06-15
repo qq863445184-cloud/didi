@@ -50,7 +50,7 @@ HTML = """<!doctype html>
     <section>
       <h2>操作</h2>
       <button type="button" onclick="window.submitDashboardAction('/api/ingest-demo')">导入业务多模态示例</button>
-      <div class="hint">示例会生成发票图片和客服录音占位文件；上传真实文件时会走 OCR/ASR 抽取文本。</div>
+      <div class="hint">示例按钮使用固定样例抽取文本；上传真实图片/音频时会走 OCR/ASR 抽取文本。</div>
 
       <label>上传其他文件</label>
       <input id="uploadFile" type="file" />
@@ -171,17 +171,42 @@ class DashboardHTTPHandler(BaseHTTPRequestHandler):
         audio = self.demo_dir / "support_call_ORD-2026-778.wav"
         invoice.write_bytes(b"fake invoice image bytes")
         audio.write_bytes(b"fake support audio bytes")
-        invoice_output = self.dashboard.ingest_file(
-            invoice,
-            "Finance invoice screenshot from the refund workflow.",
-            0.85,
+        perception_tool = self.dashboard.perception_tool
+        if perception_tool is None:
+            return "未配置感知工具，无法导入示例。"
+
+        # 示例文件是占位字节，不适合触发真实重模型；真实 OCR/ASR 留给用户上传文件时执行。
+        old_image_ocr = perception_tool.image_ocr
+        old_audio_asr = perception_tool.audio_asr
+        perception_tool.image_ocr = self._demo_image_ocr
+        perception_tool.audio_asr = self._demo_audio_asr
+        try:
+            invoice_output = self.dashboard.ingest_file(
+                invoice,
+                "Finance invoice screenshot from the refund workflow.",
+                0.85,
+            )
+            audio_output = self.dashboard.ingest_file(
+                audio,
+                "Customer support call recording linked to refund workflow.",
+                0.9,
+            )
+            return "\n\n".join([invoice_output, audio_output])
+        finally:
+            perception_tool.image_ocr = old_image_ocr
+            perception_tool.audio_asr = old_audio_asr
+
+    def _demo_image_ocr(self, _path: Path) -> str:
+        return (
+            "Invoice No: INV-2026-001. Vendor: Cloud Training Ltd. "
+            "Total amount: 1280 CNY. Payment status: paid."
         )
-        audio_output = self.dashboard.ingest_file(
-            audio,
-            "Customer support call recording linked to refund workflow.",
-            0.9,
+
+    def _demo_audio_asr(self, _path: Path) -> str:
+        return (
+            "Support call transcript: customer made a refund request for order "
+            "ORD-2026-778 and referenced invoice INV-2026-001."
         )
-        return "\n\n".join([invoice_output, audio_output])
 
     def _reset_dashboard(self) -> str:
         """Reset the in-memory demo stack without deleting uploaded files.
