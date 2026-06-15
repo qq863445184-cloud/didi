@@ -8,6 +8,7 @@ from .document_parser import DocumentParserPipeline, ParsedDocument
 from .document_learning_ui import DocumentLearningUI, build_gradio_app
 from .document_store import SQLiteDocumentStore
 from .entity_extraction import SpacyEntityExtractor
+from .memory_rag_dashboard import MemoryRAGDashboard, build_memory_rag_dashboard_app
 from .models import MemoryRecord, MemorySearchResult
 from .multimodal_encoders import ClapAudioEmbedder, ClipImageEmbedder
 from .multimodal_pipeline import (
@@ -36,6 +37,7 @@ __all__ = [
     "DocumentLearningUI",
     "SQLiteDocumentStore",
     "EpisodicMemoryStore",
+    "MemoryRAGDashboard",
     "MyMemoryManager",
     "MyMemoryTool",
     "MyPerceptionTool",
@@ -59,4 +61,5 @@ __all__ = [
     "recency_factor",
     "access_factor",
     "build_gradio_app",
+    "build_memory_rag_dashboard_app",
 ]
