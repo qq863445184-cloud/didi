@@ -357,14 +357,15 @@ class MyRAGTool(Tool):
             limit=limit,
             parameters=parameters,
         )
-        self.last_retrieved_chunks = self._format_retrieved_chunks(results)
+        answer_results = self._select_answer_results(results)
+        self.last_retrieved_chunks = self._format_retrieved_chunks(answer_results)
 
-        if not results:
+        if not answer_results:
             return f"未找到与 '{question}' 相关的知识库内容。"
 
         context = "\n\n".join(
             f"片段 {index}: {item['metadata'].get('content', '')}"
-            for index, item in enumerate(results, 1)
+            for index, item in enumerate(answer_results, 1)
         )
         prompt = [
             {
@@ -382,18 +383,30 @@ class MyRAGTool(Tool):
                 "stage": "rag.ask",
                 "question": question,
                 "namespace": namespace,
-                "hits": len(results),
+                "hits": len(answer_results),
             }
         )
 
         lines = ["智能问答结果：", str(answer).strip(), "", "参考来源："]
-        for index, item in enumerate(results, 1):
+        for index, item in enumerate(answer_results, 1):
             meta = item["metadata"]
             lines.append(
                 f"{index}. {meta.get('document_id')}#chunk-{meta.get('chunk_index')} "
                 f"score={item['score']:.3f}"
             )
         return "\n".join(lines)
+
+    def _select_answer_results(self, results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Return the chunks that are actually used to augment an answer."""
+
+        relevant = [
+            item
+            for item in results
+            if float(item.get("score", 0.0)) > 0.0
+            or float(item.get("vector_score", 0.0)) > 0.0
+            or float(item.get("keyword_score", 0.0)) > 0.0
+        ]
+        return relevant or results
 
     def _format_retrieved_chunks(self, results: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Expose retrieved chunk text for demos, debugging, and UI evidence panels."""

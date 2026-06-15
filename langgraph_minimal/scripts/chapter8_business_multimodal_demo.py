@@ -113,7 +113,80 @@ class BusinessDemoLLM:
             return "INV-2026-001 发票金额\nORD-2026-778 退款请求\ninvoice refund amount"
         if "生成一段可能出现在知识库中的假设性答案" in prompt:
             return "客户针对订单 ORD-2026-778 提出 refund request，并关联发票 INV-2026-001。"
+        if "相关上下文" in prompt:
+            return self._answer_from_context(prompt)
         return "已从发票图片和客服录音中确认：INV-2026-001 金额 1280 CNY，订单 ORD-2026-778 有 refund request。"
+
+    def _answer_from_context(self, prompt: str) -> str:
+        """Generate a deterministic answer from the RAG context.
+
+        The real dashboard can swap this fake LLM for HelloAgentsLLM or another
+        provider.  For local tests, this method still follows the same RAG shape:
+        answer only from the retrieved context embedded in the prompt.
+        """
+
+        question = self._extract_between(prompt, "问题：", "\n\n相关上下文：").strip()
+        context = self._extract_between(prompt, "相关上下文：", "\n\n请给出").strip()
+
+        if any(marker in question for marker in ("哪些", "包括", "字段")):
+            field_items = self._extract_field_items(context)
+            if field_items:
+                lead = "统一交互协议可包括：" if "统一交互协议" in question else "相关字段包括："
+                return "\n".join([lead, *(f"- {item}" for item in field_items)])
+
+        question_lowered = question.lower()
+        if (
+            "refund" in question_lowered
+            or "invoice" in question_lowered
+            or "发票" in question
+            or "订单" in question
+        ):
+            return "根据检索上下文，退款请求关联发票 INV-2026-001，订单号为 ORD-2026-778，金额为 1280 CNY。"
+
+        sentences = self._context_sentences(context)
+        if sentences:
+            return "\n".join(f"{index}. {sentence}" for index, sentence in enumerate(sentences[:3], 1))
+        return "检索上下文中没有足够信息回答该问题。"
+
+    def _extract_between(self, text: str, start: str, end: str) -> str:
+        if start not in text:
+            return ""
+        suffix = text.split(start, 1)[1]
+        if end not in suffix:
+            return suffix
+        return suffix.split(end, 1)[0]
+
+    def _extract_field_items(self, context: str) -> list[str]:
+        items: list[str] = []
+        for line in context.splitlines():
+            normalized = line.strip()
+            if not normalized.startswith("- "):
+                continue
+            normalized = normalized[2:].strip(" ；;。")
+            if "：" in normalized:
+                key, value = normalized.split("：", 1)
+            elif ":" in normalized:
+                key, value = normalized.split(":", 1)
+            else:
+                continue
+            key = key.strip(" `")
+            value = value.strip(" `；;。")
+            if key and value:
+                items.append(f"{key}：{value}")
+        return items
+
+    def _context_sentences(self, context: str) -> list[str]:
+        cleaned = context.replace("片段 ", "\n片段 ")
+        parts = []
+        for line in cleaned.splitlines():
+            line = line.strip()
+            if not line or line.startswith("片段"):
+                continue
+            for sentence in line.replace("；", "。").split("。"):
+                sentence = sentence.strip(" #\n\t")
+                if sentence and not sentence.startswith("##"):
+                    parts.append(sentence)
+        return parts
 
 
 def build_business_multimodal_demo() -> tuple[MyPerceptionTool, MyRAGTool, MyMemoryManager]:

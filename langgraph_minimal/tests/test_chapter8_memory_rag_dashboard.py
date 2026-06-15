@@ -37,6 +37,7 @@ def test_memory_rag_dashboard_drives_multimodal_rag_and_memory(tmp_path):
     assert "perceptual" in inventory_output
     assert "semantic" in inventory_output
     assert "perception.sync_rag" in trace_output
+    assert "rag.ask" in trace_output
 
 
 def test_memory_rag_dashboard_answers_from_uploaded_document_evidence(tmp_path):
@@ -123,3 +124,4 @@ def test_memory_rag_dashboard_answers_protocol_field_questions(tmp_path):
     assert "stop_condition" in answer_output
     assert "根据检索到的" not in answer_output
     assert "核心方案" not in answer_output
+    assert "rag.ask" in dashboard.trace()

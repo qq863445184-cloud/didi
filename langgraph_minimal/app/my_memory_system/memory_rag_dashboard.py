@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 from typing import Any
 
@@ -87,10 +86,10 @@ class MemoryRAGDashboard:
         if self.rag_tool is None:
             return "未配置 RAG 工具，无法问答。"
 
-        search_output = self.rag_tool.run(
+        generated_answer = self.rag_tool.run(
             {
-                "action": "search",
-                "query": normalized,
+                "action": "ask",
+                "question": normalized,
                 "namespace": self.rag_namespace,
                 "limit": limit,
                 "enable_mqe": enable_mqe,
@@ -100,14 +99,13 @@ class MemoryRAGDashboard:
         )
         chunks = list(self.rag_tool.last_retrieved_chunks)
         if not chunks:
-            return search_output
+            return generated_answer
 
         useful_chunks = self._select_useful_chunks(normalized, chunks)
-        raw_answer = self._build_grounded_answer(normalized, useful_chunks)
         evidence = self._format_retrieved_chunks(useful_chunks, question=normalized)
         if not evidence:
-            return raw_answer
-        return "\n\n".join([raw_answer, "检索证据：", evidence])
+            return generated_answer
+        return "\n\n".join([generated_answer, "检索证据：", evidence])
 
     def recall(self, query: str, *, limit: int = 5) -> str:
         normalized = query.strip()
@@ -172,145 +170,6 @@ class MemoryRAGDashboard:
             )
         return "\n".join(lines)
 
-    def _build_grounded_answer(self, question: str, chunks: list[dict[str, Any]]) -> str:
-        """Build a transparent answer from retrieved chunks for the lightweight UI.
-
-        The dashboard demo often uses a deterministic fake LLM so it can run without
-        external services.  That fake model is useful for tests, but too rigid for
-        manual uploads.  Here we synthesize an extractive answer directly from the
-        retrieved evidence, so the page demonstrates true RAG grounding even when
-        no real generation model is configured.
-        """
-
-        if not chunks:
-            return f"智能问答结果：\n未找到与“{question}”足够相关的知识库内容。"
-
-        field_items = self._extract_field_items(question, chunks)
-        if field_items:
-            lines = ["智能问答结果：", self._field_answer_lead(question)]
-            lines.extend(f"- {item}" for item in field_items)
-            lines.extend(["", "参考来源："])
-            for index, chunk in enumerate(chunks, 1):
-                lines.append(
-                    f"{index}. {chunk.get('document_id')}#chunk-{chunk.get('chunk_index')} "
-                    f"score={float(chunk.get('score', 0.0)):.3f}"
-                )
-            return "\n".join(lines)
-
-        answer_points = self._extract_answer_points(question, chunks)
-        lines = [
-            "智能问答结果：",
-            "基于检索证据，可以回答如下：",
-        ]
-        lines.extend(f"{index}. {point}" for index, point in enumerate(answer_points, 1))
-        lines.extend(
-            [
-                "",
-                "参考来源：",
-            ]
-        )
-        for index, chunk in enumerate(chunks, 1):
-            lines.append(
-                f"{index}. {chunk.get('document_id')}#chunk-{chunk.get('chunk_index')} "
-                f"score={float(chunk.get('score', 0.0)):.3f}"
-            )
-        return "\n".join(lines)
-
-    def _extract_answer_points(
-        self,
-        question: str,
-        chunks: list[dict[str, Any]],
-    ) -> list[str]:
-        """Extract concise answer points from retrieved chunks.
-
-        The dashboard answer should stay grounded in evidence, but it should not
-        look like a raw chunk dump.  This deterministic formatter trims each chunk
-        to the question focus, removes heading noise, and keeps a few readable
-        points for the local demo.
-        """
-
-        points: list[str] = []
-        seen: set[str] = set()
-        for chunk in chunks:
-            content = self._clean_chunk_content(
-                str(chunk.get("content", "")),
-                question=question,
-                max_chars=260,
-            )
-            content = self._strip_markdown_heading_prefix(content)
-            if content and content not in seen:
-                seen.add(content)
-                points.append(content)
-            if len(points) >= 3:
-                break
-        return points or ["已检索到相关片段，但片段内容为空或无法清洗。"]
-
-    def _extract_field_items(
-        self,
-        question: str,
-        chunks: list[dict[str, Any]],
-    ) -> list[str]:
-        """Extract structured field/list items for questions such as "包括哪些".
-
-        For field-list questions, users expect the fields themselves instead of a
-        repeated paragraph.  The parser accepts common Markdown bullets and both
-        Chinese and English colons used in the chapter examples.
-        """
-
-        if not any(marker in question for marker in ("哪些", "包括", "字段")):
-            return []
-
-        items: list[str] = []
-        seen: set[str] = set()
-        for chunk in chunks:
-            focused = self._trim_to_question_focus(str(chunk.get("content", "")), question)
-            for line in focused.splitlines():
-                item = self._parse_field_line(line)
-                if item and item not in seen:
-                    seen.add(item)
-                    items.append(item)
-            if items:
-                break
-        return items
-
-    def _parse_field_line(self, line: str) -> str | None:
-        """Return a normalized list item from one Markdown-ish field line."""
-
-        normalized = line.strip()
-        if not normalized:
-            return None
-        normalized = re.sub(r"^[\-*•\d.、\s]+", "", normalized).strip()
-        if not normalized or normalized.startswith("#"):
-            return None
-        if "：" not in normalized and ":" not in normalized:
-            return None
-        key, value = re.split(r"[:：]", normalized, maxsplit=1)
-        key = key.strip(" `，,；;。")
-        value = value.strip(" `，,；;。")
-        if not key or not value:
-            return None
-        if len(key) > 80 or len(value) > 160:
-            return None
-        return f"{key}：{value}"
-
-    def _field_answer_lead(self, question: str) -> str:
-        """Build a short lead sentence for field/list answers."""
-
-        if "统一交互协议" in question:
-            return "统一交互协议可包括："
-        if "协议字段" in question or "字段" in question:
-            return "相关字段包括："
-        return "可以包括："
-
-    def _strip_markdown_heading_prefix(self, content: str) -> str:
-        """Remove leading Markdown headings when they only add display noise."""
-
-        return re.sub(
-            r"^(?:#+\s*)?[^。！？!?]{1,40}\s+(?=第一|系统|用户|一种|需要|如何)",
-            "",
-            content,
-        ).strip()
-
     def _select_useful_chunks(
         self,
         question: str,
@@ -337,8 +196,29 @@ class MemoryRAGDashboard:
             for chunk in positive
             if float(chunk.get("keyword_score", 0.0)) > 0.0
         ]
-        candidates = keyword_hits or positive or chunks
+        fallback_hits = [
+            chunk
+            for chunk in chunks
+            if self._question_overlap_score(question, str(chunk.get("content", ""))) >= 3
+        ]
+        candidates = keyword_hits or positive or fallback_hits
         return candidates[:3]
+
+    def _question_overlap_score(self, question: str, content: str) -> int:
+        """Score a chunk when the retriever gives no positive relevance signal."""
+
+        ignored_chars = set("的是了么吗什么哪些可以包括一个当前当前和与及在中为有")
+        question_chars = {
+            char
+            for char in question
+            if "\u4e00" <= char <= "\u9fff" and char not in ignored_chars
+        }
+        content_chars = {
+            char
+            for char in content
+            if "\u4e00" <= char <= "\u9fff" and char not in ignored_chars
+        }
+        return len(question_chars & content_chars)
 
     def _clean_chunk_content(
         self,
