@@ -1,4 +1,8 @@
-from scripts.chapter8_memory_rag_dashboard_demo import build_dashboard_demo
+from scripts.chapter8_memory_rag_dashboard_demo import (
+    build_dashboard_demo,
+    build_persistent_dashboard_demo,
+)
+from scripts.chapter8_memory_rag_dashboard_http_demo import build_http_dashboard
 
 
 def test_build_dashboard_demo_wires_business_multimodal_stack():
@@ -44,3 +48,30 @@ def test_build_dashboard_demo_can_use_real_multimodal_extractors(tmp_path):
 
     assert "IMG-REAL-001" in answer
     assert "AUDIO-REAL-002" in answer
+
+
+def test_build_persistent_dashboard_demo_wires_document_store_and_memory_paths(tmp_path):
+    dashboard = build_persistent_dashboard_demo(data_dir=tmp_path, strict_backends=False)
+
+    assert dashboard.rag_tool.document_store.path == tmp_path / "rag_documents.sqlite3"
+    assert dashboard.rag_tool.collection_name == "chapter8_persistent_rag"
+    assert dashboard.memory_manager.stores["working"].persistence.path == tmp_path / "working_memory.json"
+    assert dashboard.memory_manager.stores["perceptual"].persistence.path == tmp_path / "perceptual_memory.json"
+    assert set(dashboard.memory_manager.stores) == {
+        "working",
+        "semantic",
+        "episodic",
+        "perceptual",
+    }
+
+
+def test_http_dashboard_can_switch_to_persistent_builder(tmp_path, monkeypatch):
+    monkeypatch.setenv("CHAPTER8_DASHBOARD_PERSISTENT", "1")
+    monkeypatch.setenv("CHAPTER8_DASHBOARD_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("CHAPTER8_DASHBOARD_REAL_LLM", "0")
+    monkeypatch.delenv("CHAPTER8_DASHBOARD_EXTERNAL_BACKENDS", raising=False)
+
+    dashboard = build_http_dashboard()
+
+    assert dashboard.rag_tool.document_store.path == tmp_path / "rag_documents.sqlite3"
+    assert dashboard.rag_tool.backend_mode == "local_persistent"

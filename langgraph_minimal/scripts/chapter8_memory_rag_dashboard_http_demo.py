@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import uuid
 from email.parser import BytesParser
@@ -15,7 +16,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.chapter8_memory_rag_dashboard_demo import build_dashboard_demo
+from scripts.chapter8_memory_rag_dashboard_demo import (
+    build_dashboard_demo,
+    build_persistent_dashboard_demo,
+)
 
 
 HTML = """<!doctype html>
@@ -124,8 +128,41 @@ HTML = """<!doctype html>
 """
 
 
+def build_http_dashboard():
+    """Create the dashboard used by the lightweight HTTP page.
+
+    默认保持上一版的内存 demo，保证本地页面打开就能用。设置
+    CHAPTER8_DASHBOARD_PERSISTENT=1 后，会切到 SQLite/JSON 持久化版本；
+    再设置 CHAPTER8_DASHBOARD_EXTERNAL_BACKENDS=1 时尝试接 Qdrant/Neo4j。
+    """
+
+    persistent = _env_flag("CHAPTER8_DASHBOARD_PERSISTENT", default=False)
+    real_llm = _env_flag("CHAPTER8_DASHBOARD_REAL_LLM", default=True)
+    real_multimodal = _env_flag("CHAPTER8_DASHBOARD_REAL_MULTIMODAL", default=True)
+    if not persistent:
+        return build_dashboard_demo(
+            prefer_real_llm=real_llm,
+            prefer_real_multimodal=real_multimodal,
+        )
+
+    return build_persistent_dashboard_demo(
+        data_dir=os.getenv("CHAPTER8_DASHBOARD_DATA_DIR"),
+        prefer_real_llm=real_llm,
+        prefer_real_multimodal=real_multimodal,
+        prefer_external_backends=_env_flag("CHAPTER8_DASHBOARD_EXTERNAL_BACKENDS", default=False),
+        strict_backends=_env_flag("CHAPTER8_DASHBOARD_STRICT_BACKENDS", default=False),
+    )
+
+
+def _env_flag(name: str, *, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 class DashboardHTTPHandler(BaseHTTPRequestHandler):
-    dashboard = build_dashboard_demo(prefer_real_llm=True, prefer_real_multimodal=True)
+    dashboard = build_http_dashboard()
     demo_dir = Path("memory_data") / "memory_rag_dashboard_http_demo"
     upload_dir = Path("memory_data") / "memory_rag_dashboard_uploads"
 
@@ -216,10 +253,7 @@ class DashboardHTTPHandler(BaseHTTPRequestHandler):
         uploads start affecting retrieval results.
         """
 
-        type(self).dashboard = build_dashboard_demo(
-            prefer_real_llm=True,
-            prefer_real_multimodal=True,
-        )
+        type(self).dashboard = build_http_dashboard()
         return "当前内存知识库已重置。已上传的文件仍保留在 memory_data 目录，需要重新上传/入库后才能再次检索。"
 
     def _handle_upload(self, raw_payload: bytes) -> None:

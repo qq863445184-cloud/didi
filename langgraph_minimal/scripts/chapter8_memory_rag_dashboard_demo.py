@@ -10,12 +10,15 @@ from hello_agents import HelloAgentsLLM
 
 ROOT = Path(__file__).resolve().parents[1]
 from app.my_memory_system import (
+    DocumentParserPipeline,
     EpisodicMemoryStore,
     MemoryRAGDashboard,
     MyMemoryManager,
     MyRAGTool,
     PerceptualMemoryStore,
     SemanticMemoryStore,
+    SQLiteDocumentStore,
+    WorkingMemoryStore,
     build_memory_rag_dashboard_app,
     build_multimodal_perception_tool,
 )
@@ -60,6 +63,101 @@ def build_dashboard_demo(
     perception_tool, rag_tool, manager = build_business_multimodal_demo(
         llm=llm,
         llm_mode=llm_mode,
+    )
+    return MemoryRAGDashboard(
+        perception_tool=perception_tool,
+        rag_tool=rag_tool,
+        memory_manager=manager,
+        rag_namespace="business_multimodal",
+    )
+
+
+def build_persistent_dashboard_demo(
+    *,
+    data_dir: str | Path | None = None,
+    prefer_real_llm: bool = False,
+    prefer_real_multimodal: bool = True,
+    prefer_external_backends: bool = False,
+    strict_backends: bool = False,
+    image_ocr: Callable[[Path], str] | None = None,
+    audio_asr: Callable[[Path], str] | None = None,
+) -> MemoryRAGDashboard:
+    """Build a Chapter 8 dashboard with persistent local metadata.
+
+    本地持久化层始终启用：RAG 文档/chunk 元数据写入 SQLite，working 和
+    perceptual 记忆写入 JSON。Qdrant/Neo4j 属于外部后端，只有在
+    prefer_external_backends=True 时接入；如果外部服务不可用，非 strict 模式会
+    回退到内存向量/图存储，让页面仍然可用。
+    """
+
+    load_dotenv(ROOT / ".env", override=True)
+    workspace = Path(data_dir or ROOT / "memory_data" / "persistent_dashboard")
+    workspace.mkdir(parents=True, exist_ok=True)
+
+    llm = None
+    llm_mode = "demo"
+    if prefer_real_llm:
+        llm = _build_real_llm()
+        llm_mode = "real"
+
+    embedder, rag_vector_store, semantic_vector_store, graph_store, backend_mode = (
+        _build_persistent_backends(
+            prefer_external_backends=prefer_external_backends,
+            strict_backends=strict_backends,
+        )
+    )
+    rag_tool = MyRAGTool(
+        embedder=embedder,
+        vector_store=rag_vector_store,
+        llm=llm or BusinessDemoLLM(),
+        document_store=SQLiteDocumentStore(workspace / "rag_documents.sqlite3"),
+        parser_pipeline=_build_document_parser_pipeline(
+            prefer_real_multimodal=prefer_real_multimodal,
+            image_ocr=image_ocr,
+            audio_asr=audio_asr,
+        ),
+        collection_name="chapter8_persistent_rag",
+    )
+    rag_tool.llm_mode = llm_mode
+    rag_tool.backend_mode = backend_mode
+
+    manager = MyMemoryManager(
+        user_id="dashboard_persistent_user",
+        stores={
+            "working": WorkingMemoryStore(
+                persistence_path=str(workspace / "working_memory.json")
+            ),
+            "semantic": SemanticMemoryStore(
+                embedder=embedder,
+                vector_store=semantic_vector_store,
+                graph_store=graph_store,
+                collection_name="chapter8_persistent_semantic",
+                restore_existing=prefer_external_backends,
+            ),
+            "episodic": EpisodicMemoryStore(
+                graph_store=graph_store,
+                restore_existing=prefer_external_backends,
+            ),
+            "perceptual": PerceptualMemoryStore(
+                persistence_path=str(workspace / "perceptual_memory.json")
+            ),
+        },
+    )
+
+    perception_tool = build_multimodal_perception_tool(
+        manager=manager,
+        rag_tool=rag_tool,
+        rag_namespace="business_multimodal",
+        image_ocr=image_ocr,
+        audio_asr=audio_asr,
+        enable_ocr=prefer_real_multimodal,
+        enable_asr=prefer_real_multimodal,
+        enable_image_embedding=False,
+        enable_audio_embedding=False,
+        model_root=ROOT / "models",
+        multimodal_python=_external_multimodal_python(),
+        multimodal_worker=_external_multimodal_worker(),
+        collection_name="chapter8_persistent_perceptual",
     )
     return MemoryRAGDashboard(
         perception_tool=perception_tool,
@@ -122,6 +220,112 @@ def _build_real_multimodal_dashboard(
         memory_manager=manager,
         rag_namespace="business_multimodal",
     )
+
+
+def _build_persistent_backends(
+    *,
+    prefer_external_backends: bool,
+    strict_backends: bool,
+) -> tuple[object, object, object, object, str]:
+    embedder = BusinessKeywordEmbedder()
+    rag_vector_store = InMemoryVectorStore()
+    semantic_vector_store = InMemoryVectorStore()
+    graph_store = InMemoryGraphStore()
+    backend_mode = "local_persistent"
+
+    if not prefer_external_backends:
+        return embedder, rag_vector_store, semantic_vector_store, graph_store, backend_mode
+
+    try:
+        from hello_agents.memory.embedding import get_text_embedder
+        from hello_agents.memory.storage.neo4j_store import Neo4jGraphStore
+        from hello_agents.memory.storage.qdrant_store import QdrantVectorStore
+
+        embedder = get_text_embedder()
+        rag_vector_store = QdrantVectorStore(
+            url=os.getenv("QDRANT_URL"),
+            api_key=os.getenv("QDRANT_API_KEY") or None,
+            collection_name="chapter8_persistent_rag",
+            vector_size=int(os.getenv("EMBED_VECTOR_SIZE", "384")),
+            distance="cosine",
+        )
+        semantic_vector_store = QdrantVectorStore(
+            url=os.getenv("QDRANT_URL"),
+            api_key=os.getenv("QDRANT_API_KEY") or None,
+            collection_name="chapter8_persistent_semantic",
+            vector_size=int(os.getenv("EMBED_VECTOR_SIZE", "384")),
+            distance="cosine",
+        )
+        graph_store = Neo4jGraphStore(
+            uri=os.getenv("NEO4J_URI", "bolt://localhost:7687"),
+            username=os.getenv("NEO4J_USERNAME", "neo4j"),
+            password=os.getenv("NEO4J_PASSWORD", "hello-agents-password"),
+            database=os.getenv("NEO4J_DATABASE", "neo4j"),
+        )
+        backend_mode = "qdrant_neo4j_sqlite"
+        return embedder, rag_vector_store, semantic_vector_store, graph_store, backend_mode
+    except Exception:
+        if strict_backends:
+            raise
+        return embedder, rag_vector_store, semantic_vector_store, graph_store, backend_mode
+
+
+def _build_document_parser_pipeline(
+    *,
+    prefer_real_multimodal: bool,
+    image_ocr: Callable[[Path], str] | None,
+    audio_asr: Callable[[Path], str] | None,
+) -> DocumentParserPipeline:
+    if not prefer_real_multimodal:
+        return DocumentParserPipeline(image_ocr=image_ocr, audio_asr=audio_asr)
+    return DocumentParserPipeline(
+        image_ocr=image_ocr or _real_image_ocr,
+        audio_asr=audio_asr or _real_audio_asr,
+    )
+
+
+def _external_multimodal_python() -> Path | None:
+    path = ROOT / ".venv-asr" / "Scripts" / "python.exe"
+    return path if path.exists() else None
+
+
+def _external_multimodal_worker() -> Path | None:
+    path = ROOT / "scripts" / "chapter8_multimodal_worker.py"
+    return path if path.exists() else None
+
+
+def _real_image_ocr(path: Path) -> str:
+    from app.my_memory_system.multimodal_pipeline import ExternalRuntimeOCR, PaddleOCRVLOCR
+
+    external_python = _external_multimodal_python()
+    external_worker = _external_multimodal_worker()
+    if external_python is not None and external_worker is not None:
+        processor = ExternalRuntimeOCR(
+            python_path=external_python,
+            worker_path=external_worker,
+            model_dir=ROOT / "models" / "PaddlePaddle" / "PaddleOCR-VL-1.6",
+        )
+    else:
+        processor = PaddleOCRVLOCR(
+            model_dir=ROOT / "models" / "PaddlePaddle" / "PaddleOCR-VL-1.6"
+        )
+    return str(processor(path))
+
+
+def _real_audio_asr(path: Path) -> str:
+    from app.my_memory_system.multimodal_pipeline import ExternalRuntimeASR, SenseVoiceASR
+
+    external_python = _external_multimodal_python()
+    external_worker = _external_multimodal_worker()
+    if external_python is not None and external_worker is not None:
+        processor = ExternalRuntimeASR(
+            python_path=external_python,
+            worker_path=external_worker,
+            model_dir=ROOT / "models" / "iic" / "SenseVoiceSmall",
+        )
+    else:
+        processor = SenseVoiceASR(model_dir=ROOT / "models" / "iic" / "SenseVoiceSmall")
+    return str(processor(path))
 
 
 def _build_real_llm() -> HelloAgentsLLM:
