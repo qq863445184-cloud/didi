@@ -125,7 +125,7 @@ HTML = """<!doctype html>
 
 
 class DashboardHTTPHandler(BaseHTTPRequestHandler):
-    dashboard = build_dashboard_demo()
+    dashboard = build_dashboard_demo(prefer_real_llm=True)
     demo_dir = Path("memory_data") / "memory_rag_dashboard_http_demo"
     upload_dir = Path("memory_data") / "memory_rag_dashboard_uploads"
 
@@ -191,7 +191,7 @@ class DashboardHTTPHandler(BaseHTTPRequestHandler):
         uploads start affecting retrieval results.
         """
 
-        type(self).dashboard = build_dashboard_demo()
+        type(self).dashboard = build_dashboard_demo(prefer_real_llm=True)
         return "当前内存知识库已重置。已上传的文件仍保留在 memory_data 目录，需要重新上传/入库后才能再次检索。"
 
     def _handle_upload(self, raw_payload: bytes) -> None:

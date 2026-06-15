@@ -189,14 +189,19 @@ class BusinessDemoLLM:
         return parts
 
 
-def build_business_multimodal_demo() -> tuple[MyPerceptionTool, MyRAGTool, MyMemoryManager]:
+def build_business_multimodal_demo(
+    *,
+    llm: Any | None = None,
+    llm_mode: str = "demo",
+) -> tuple[MyPerceptionTool, MyRAGTool, MyMemoryManager]:
     embedder = BusinessKeywordEmbedder()
     rag_tool = MyRAGTool(
         embedder=embedder,
         vector_store=InMemoryVectorStore(),
-        llm=BusinessDemoLLM(),
+        llm=llm or BusinessDemoLLM(),
         collection_name="chapter8_business_multimodal",
     )
+    rag_tool.llm_mode = llm_mode
     manager = MyMemoryManager(
         user_id="business_demo_user",
         stores={

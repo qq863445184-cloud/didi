@@ -384,6 +384,8 @@ class MyRAGTool(Tool):
                 "question": question,
                 "namespace": namespace,
                 "hits": len(answer_results),
+                "llm_mode": getattr(self, "llm_mode", "default"),
+                "llm_class": type(self.llm).__name__,
             }
         )
 

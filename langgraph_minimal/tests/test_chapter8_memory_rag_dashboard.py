@@ -38,6 +38,7 @@ def test_memory_rag_dashboard_drives_multimodal_rag_and_memory(tmp_path):
     assert "semantic" in inventory_output
     assert "perception.sync_rag" in trace_output
     assert "rag.ask" in trace_output
+    assert "llm_mode" in trace_output
 
 
 def test_memory_rag_dashboard_answers_from_uploaded_document_evidence(tmp_path):
