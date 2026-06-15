@@ -45,24 +45,24 @@ HTML = """<!doctype html>
   <main>
     <section>
       <h2>操作</h2>
-      <button onclick="post('/api/ingest-demo')">导入业务多模态示例</button>
+      <button type="button" onclick="window.submitDashboardAction('/api/ingest-demo')">导入业务多模态示例</button>
       <div class="hint">示例会生成发票图片和客服录音占位文件，并通过注入 OCR/ASR 文本入库。</div>
 
       <label>上传其他文件</label>
       <input id="uploadFile" type="file" />
       <input id="uploadDescription" value="User uploaded file for memory/RAG demo." />
-      <button onclick="upload()">上传并感知入库</button>
+      <button type="button" onclick="window.uploadDashboardFile()">上传并感知入库</button>
       <div class="hint">支持文本、Markdown、图片、音频等；图片/音频在本 demo 中使用注入的 OCR/ASR 示例文本。</div>
 
       <label>问题</label>
       <textarea id="question">Which invoice is tied to the refund request?</textarea>
-      <button onclick="post('/api/ask', { question: value('question') })">提问</button>
+      <button type="button" onclick="window.submitDashboardAction('/api/ask', { question: value('question') })">提问</button>
 
       <label>记忆检索关键词</label>
       <input id="query" value="INV-2026-001 refund request" />
-      <button onclick="post('/api/recall', { query: value('query') })">检索记忆</button>
-      <button class="secondary" onclick="post('/api/inventory')">记忆库存</button>
-      <button class="secondary" onclick="post('/api/trace')">Trace</button>
+      <button type="button" onclick="window.submitDashboardAction('/api/recall', { query: value('query') })">检索记忆</button>
+      <button type="button" class="secondary" onclick="window.submitDashboardAction('/api/inventory')">记忆库存</button>
+      <button type="button" class="secondary" onclick="window.submitDashboardAction('/api/trace')">Trace</button>
     </section>
     <section>
       <h2>输出</h2>
@@ -71,27 +71,41 @@ HTML = """<!doctype html>
   </main>
   <script>
     function value(id) { return document.getElementById(id).value; }
-    async function post(url, payload = {}) {
+    window.submitDashboardAction = async function(url, payload = {}) {
       const output = document.getElementById('output');
-      output.textContent = '请求中...';
-      const body = new URLSearchParams(payload);
-      const response = await fetch(url, { method: 'POST', body });
-      output.textContent = await response.text();
+      const start = Date.now();
+      output.textContent = `请求中... (${new Date().toLocaleTimeString()})`;
+      try {
+        const body = new URLSearchParams(payload);
+        const response = await fetch(url, { method: 'POST', body });
+        const text = await response.text();
+        const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+        output.textContent = `[${response.status}] ${elapsed}s\n\n${text}`;
+      } catch (error) {
+        output.textContent = `请求失败：${error.message || error}`;
+      }
     }
-    async function upload() {
+    window.uploadDashboardFile = async function() {
       const output = document.getElementById('output');
       const fileInput = document.getElementById('uploadFile');
       if (!fileInput.files.length) {
         output.textContent = '请先选择文件。';
         return;
       }
-      output.textContent = '上传中...';
+      const start = Date.now();
+      output.textContent = `上传中... (${new Date().toLocaleTimeString()})`;
       const body = new FormData();
       body.append('file', fileInput.files[0]);
       body.append('description', value('uploadDescription'));
       body.append('importance', '0.75');
-      const response = await fetch('/api/upload', { method: 'POST', body });
-      output.textContent = await response.text();
+      try {
+        const response = await fetch('/api/upload', { method: 'POST', body });
+        const text = await response.text();
+        const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+        output.textContent = `[${response.status}] ${elapsed}s\n\n${text}`;
+      } catch (error) {
+        output.textContent = `上传失败：${error.message || error}`;
+      }
     }
   </script>
 </body>
