@@ -70,6 +70,7 @@ HTML = """<!doctype html>
       <input id="query" value="INV-2026-001 refund request" />
       <button type="button" onclick="window.recallDashboardMemory()">检索记忆</button>
       <button type="button" class="secondary" onclick="window.submitDashboardAction('/api/inventory')">记忆库存</button>
+      <button type="button" class="secondary" onclick="window.submitDashboardAction('/api/rag-inventory')">RAG文档库</button>
       <button type="button" class="secondary" onclick="window.submitDashboardAction('/api/trace')">Trace</button>
       <button type="button" class="secondary" onclick="window.submitDashboardAction('/api/reset')">重置当前知识库</button>
     </section>
@@ -186,6 +187,7 @@ class DashboardHTTPHandler(BaseHTTPRequestHandler):
             "/api/ask": lambda: self.dashboard.ask(form.get("question", "")),
             "/api/recall": lambda: self.dashboard.recall(form.get("query", "")),
             "/api/inventory": self.dashboard.memory_inventory,
+            "/api/rag-inventory": self.dashboard.rag_inventory,
             "/api/trace": self.dashboard.trace,
             "/api/reset": self._reset_dashboard,
         }

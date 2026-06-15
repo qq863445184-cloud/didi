@@ -138,6 +138,47 @@ class MemoryRAGDashboard:
             payload = {"total": 0, "by_type": {}}
         return json.dumps(payload, ensure_ascii=False, indent=2)
 
+    def rag_inventory(self) -> str:
+        """Return document/chunk metadata for the current RAG namespace.
+
+        向量库负责“相似度召回”，但它不适合直接展示文档来源、解析器和
+        chunk 数。这里读取 document_store，把第八章 RAG 架构里的文档库状态
+        暴露给页面，方便确认上传文件是否真的完成了入库和切块。
+        """
+
+        document_store = getattr(self.rag_tool, "document_store", None)
+        if document_store is None or not hasattr(document_store, "list_documents"):
+            return "未配置 RAG 文档库，无法查看文档清单。"
+
+        documents = document_store.list_documents(namespace=self.rag_namespace)
+        rows: list[dict[str, Any]] = []
+        for document in documents:
+            document_id = str(document.get("document_id", ""))
+            chunks = (
+                document_store.list_chunks(document_id, namespace=self.rag_namespace)
+                if hasattr(document_store, "list_chunks")
+                else []
+            )
+            rows.append(
+                {
+                    "document_id": document_id,
+                    "namespace": document.get("namespace"),
+                    "chunk_count": len(chunks),
+                    "parser": document.get("parser"),
+                    "source_path": document.get("source_path"),
+                    "updated_at": document.get("updated_at"),
+                    "metadata": document.get("metadata") or {},
+                }
+            )
+
+        payload = {
+            "namespace": self.rag_namespace,
+            "storage_path": str(getattr(document_store, "path", "")),
+            "document_count": len(rows),
+            "documents": rows,
+        }
+        return json.dumps(payload, ensure_ascii=False, indent=2)
+
     def trace(self) -> str:
         return json.dumps(self._trace_events(), ensure_ascii=False, indent=2)
 
@@ -300,8 +341,10 @@ def build_memory_rag_dashboard_app(dashboard: MemoryRAGDashboard) -> Any:
             recall_query = gr.Textbox(label="记忆检索关键词")
             recall_output = gr.Textbox(label="记忆检索结果", lines=10)
             inventory_output = gr.Code(label="记忆库存", language="json")
+            rag_inventory_output = gr.Code(label="RAG 文档库", language="json")
             gr.Button("检索记忆").click(dashboard.recall, inputs=recall_query, outputs=recall_output)
             gr.Button("刷新库存").click(dashboard.memory_inventory, outputs=inventory_output)
+            gr.Button("刷新 RAG 文档库").click(dashboard.rag_inventory, outputs=rag_inventory_output)
 
         with gr.Tab("Trace"):
             trace_output = gr.Code(label="Trace", language="json")

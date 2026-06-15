@@ -1,3 +1,5 @@
+import json
+
 from scripts.chapter8_memory_rag_dashboard_demo import (
     build_dashboard_demo,
     build_persistent_dashboard_demo,
@@ -75,3 +77,27 @@ def test_http_dashboard_can_switch_to_persistent_builder(tmp_path, monkeypatch):
 
     assert dashboard.rag_tool.document_store.path == tmp_path / "rag_documents.sqlite3"
     assert dashboard.rag_tool.backend_mode == "local_persistent"
+
+
+def test_persistent_dashboard_reports_rag_document_inventory(tmp_path):
+    note = tmp_path / "chapter8_rag_note.md"
+    note.write_text(
+        "# 第八章\n\n## RAG\n\nRAG 包括文档导入、切块、检索和生成。",
+        encoding="utf-8",
+    )
+    dashboard = build_persistent_dashboard_demo(data_dir=tmp_path, strict_backends=False)
+
+    dashboard.load_document(note)
+    inventory = dashboard.rag_inventory()
+    payload = json.loads(inventory)
+
+    assert "chapter8_rag_note.md" in inventory
+    assert payload["document_count"] == 1
+    assert payload["documents"][0]["chunk_count"] == len(
+        dashboard.rag_tool.document_store.list_chunks(
+            "chapter8_rag_note.md",
+            namespace="business_multimodal",
+        )
+    )
+    assert '"parser": "plain_text"' in inventory
+    assert payload["documents"][0]["source_path"] == str(note)

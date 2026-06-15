@@ -126,3 +126,9 @@ def test_memory_rag_dashboard_answers_protocol_field_questions(tmp_path):
     assert "根据检索到的" not in answer_output
     assert "核心方案" not in answer_output
     assert "rag.ask" in dashboard.trace()
+
+
+def test_memory_rag_dashboard_rag_inventory_handles_missing_document_store():
+    dashboard = MemoryRAGDashboard()
+
+    assert dashboard.rag_inventory() == "未配置 RAG 文档库，无法查看文档清单。"
