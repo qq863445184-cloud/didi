@@ -76,7 +76,7 @@ class MemoryRAGDashboard:
         question: str,
         *,
         limit: int = 5,
-        enable_mqe: bool = True,
+        enable_mqe: bool = False,
         enable_hyde: bool = False,
         enable_keyword_rerank: bool = True,
     ) -> str:
@@ -86,10 +86,10 @@ class MemoryRAGDashboard:
         if self.rag_tool is None:
             return "未配置 RAG 工具，无法问答。"
 
-        raw_answer = self.rag_tool.run(
+        search_output = self.rag_tool.run(
             {
-                "action": "ask",
-                "question": normalized,
+                "action": "search",
+                "query": normalized,
                 "namespace": self.rag_namespace,
                 "limit": limit,
                 "enable_mqe": enable_mqe,
@@ -97,7 +97,13 @@ class MemoryRAGDashboard:
                 "enable_keyword_rerank": enable_keyword_rerank,
             }
         )
-        evidence = self._format_retrieved_chunks(self.rag_tool.last_retrieved_chunks)
+        chunks = list(self.rag_tool.last_retrieved_chunks)
+        if not chunks:
+            return search_output
+
+        useful_chunks = self._select_useful_chunks(normalized, chunks)
+        raw_answer = self._build_grounded_answer(normalized, useful_chunks)
+        evidence = self._format_retrieved_chunks(useful_chunks)
         if not evidence:
             return raw_answer
         return "\n\n".join([raw_answer, "检索证据：", evidence])
@@ -155,6 +161,80 @@ class MemoryRAGDashboard:
                 f"   {content}"
             )
         return "\n".join(lines)
+
+    def _build_grounded_answer(self, question: str, chunks: list[dict[str, Any]]) -> str:
+        """Build a transparent answer from retrieved chunks for the lightweight UI.
+
+        The dashboard demo often uses a deterministic fake LLM so it can run without
+        external services.  That fake model is useful for tests, but too rigid for
+        manual uploads.  Here we synthesize an extractive answer directly from the
+        retrieved evidence, so the page demonstrates true RAG grounding even when
+        no real generation model is configured.
+        """
+
+        if not chunks:
+            return f"智能问答结果：\n未找到与“{question}”足够相关的知识库内容。"
+
+        lines = [
+            "智能问答结果：",
+            f"根据检索到的 {len(chunks)} 个高相关片段，可以回答如下：",
+        ]
+        for index, chunk in enumerate(chunks, 1):
+            content = self._clean_chunk_content(str(chunk.get("content", "")))
+            lines.append(
+                f"{index}. {content}"
+            )
+        lines.extend(
+            [
+                "",
+                "参考来源：",
+            ]
+        )
+        for index, chunk in enumerate(chunks, 1):
+            lines.append(
+                f"{index}. {chunk.get('document_id')}#chunk-{chunk.get('chunk_index')} "
+                f"score={float(chunk.get('score', 0.0)):.3f}"
+            )
+        return "\n".join(lines)
+
+    def _select_useful_chunks(
+        self,
+        question: str,
+        chunks: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Pick evidence that is relevant to the current question.
+
+        The demo can mix deterministic OCR/ASR fixtures with user uploads.  Those
+        fixtures may have high vector scores even when the question is about a
+        newly uploaded document, so direct keyword matches are treated as stronger
+        evidence for the dashboard answer.  If no keyword match exists, we fall
+        back to the vector/rerank order from the RAG tool.
+        """
+
+        positive = [
+            chunk
+            for chunk in chunks
+            if float(chunk.get("score", 0.0)) > 0.0
+            or float(chunk.get("keyword_score", 0.0)) > 0.0
+            or float(chunk.get("vector_score", 0.0)) > 0.0
+        ]
+        keyword_hits = [
+            chunk
+            for chunk in positive
+            if float(chunk.get("keyword_score", 0.0)) > 0.0
+        ]
+        candidates = keyword_hits or positive or chunks
+        return candidates[:3]
+
+    def _clean_chunk_content(self, content: str, *, max_chars: int = 360) -> str:
+        raw = content.strip()
+        if raw.startswith("# Perceptual source:") and "\n\n" in raw:
+            # Perceptual RAG chunks prepend source metadata before extracted text.
+            raw = raw.split("\n\n", 1)[1].strip()
+        normalized = " ".join(raw.split())
+        if len(normalized) <= max_chars:
+            return normalized
+        return f"{normalized[:max_chars].rstrip()}..."
 
 
 def build_memory_rag_dashboard_app(dashboard: MemoryRAGDashboard) -> Any:
