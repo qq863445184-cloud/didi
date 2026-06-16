@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from app.my_memory_system import (
+    DocumentParserPipeline,
     EpisodicMemoryStore,
     MyMemoryManager,
     MyPerceptionTool,
@@ -308,6 +309,48 @@ def test_perception_tool_syncs_extracted_text_to_semantic_and_episodic_memory(tm
     assert episodic_hits[0].record.metadata["event_type"] == "perception_ingest"
     assert any(event["stage"] == "perception.sync_semantic" for event in tool.trace_events)
     assert any(event["stage"] == "perception.sync_episodic" for event in tool.trace_events)
+
+
+def test_perception_tool_extracts_document_text_before_syncing_episodic_memory(tmp_path):
+    class FakeMarkItDown:
+        def convert(self, file_path):
+            class Result:
+                text_content = "PDF 正文包含 EPISODIC-PDF-001 和合同审批事件"
+
+            return Result()
+
+    pdf = tmp_path / "contract.pdf"
+    pdf.write_bytes(b"%PDF fake bytes")
+    manager = MyMemoryManager(
+        user_id="perception_user",
+        stores={
+            "perceptual": PerceptualMemoryStore(),
+            "episodic": EpisodicMemoryStore(graph_store=FakeGraphStore()),
+        },
+    )
+    tool = MyPerceptionTool(
+        manager=manager,
+        parser_pipeline=DocumentParserPipeline(markitdown=FakeMarkItDown()),
+    )
+
+    result = tool.run(
+        {
+            "action": "ingest_file",
+            "file_path": str(pdf),
+            "description": "PDF 上传测试",
+            "importance": 0.8,
+        }
+    )
+    episodic_hits = manager.search(
+        query="EPISODIC-PDF-001 合同审批",
+        memory_type="episodic",
+    )
+
+    assert "- modality: document" in result
+    assert "- extractor: markitdown" in result
+    assert "episodic_memory_id" in result
+    assert episodic_hits
+    assert "EPISODIC-PDF-001" in episodic_hits[0].record.content
 
 
 def test_perception_tool_attaches_modality_embedding_when_encoder_is_injected(tmp_path):

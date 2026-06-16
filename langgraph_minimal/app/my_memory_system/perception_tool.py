@@ -7,6 +7,7 @@ from typing import Any, Callable
 from hello_agents.tools.base import Tool, ToolParameter
 
 from .manager import MyMemoryManager
+from .document_parser import DocumentParserPipeline
 from .stores import PerceptualMemoryStore, WorkingMemoryStore
 
 
@@ -30,6 +31,17 @@ class MyPerceptionTool(Tool):
         ".csv",
         ".log",
     }
+    DOCUMENT_SUFFIXES = {
+        ".pdf",
+        ".doc",
+        ".docx",
+        ".ppt",
+        ".pptx",
+        ".xls",
+        ".xlsx",
+        ".html",
+        ".htm",
+    }
     IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
     AUDIO_SUFFIXES = {".mp3", ".wav", ".m4a", ".flac", ".ogg"}
     VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".avi", ".webm"}
@@ -43,6 +55,7 @@ class MyPerceptionTool(Tool):
         encoders: dict[str, Callable[[Path], list[float]]] | None = None,
         rag_tool: Any | None = None,
         rag_namespace: str = "perceptual",
+        parser_pipeline: DocumentParserPipeline | None = None,
     ) -> None:
         super().__init__(
             name="perception",
@@ -59,6 +72,10 @@ class MyPerceptionTool(Tool):
         self.encoders = encoders or {}
         self.rag_tool = rag_tool
         self.rag_namespace = rag_namespace
+        self.parser_pipeline = parser_pipeline or DocumentParserPipeline(
+            image_ocr=self.image_ocr,
+            audio_asr=self.audio_asr,
+        )
         self.trace_events: list[dict[str, Any]] = []
         self._call_trace: list[dict[str, Any]] = []
 
@@ -85,7 +102,7 @@ class MyPerceptionTool(Tool):
             ToolParameter(
                 name="modality",
                 type="string",
-                description="可选模态覆盖：text、image、audio、video、structured、binary",
+                description="可选模态覆盖：text、document、image、audio、video、structured、binary",
                 required=False,
             ),
             ToolParameter(
@@ -393,6 +410,8 @@ class MyPerceptionTool(Tool):
         mime_type = mimetypes.guess_type(str(file_path))[0] or ""
         if suffix in self.TEXT_SUFFIXES or mime_type.startswith("text/"):
             return "text"
+        if suffix in self.DOCUMENT_SUFFIXES:
+            return "document"
         if suffix in self.IMAGE_SUFFIXES or mime_type.startswith("image/"):
             return "image"
         if suffix in self.AUDIO_SUFFIXES or mime_type.startswith("audio/"):
@@ -406,6 +425,8 @@ class MyPerceptionTool(Tool):
     def _extract(self, file_path: Path, modality: str) -> dict[str, Any]:
         if modality in {"text", "structured"}:
             return self._extract_text_file(file_path)
+        if modality == "document":
+            return self._extract_document_file(file_path)
         if modality == "image":
             return self._extract_image_metadata(file_path)
         if modality == "audio":
@@ -416,6 +437,24 @@ class MyPerceptionTool(Tool):
             "extractor": "binary_metadata",
             "extracted_text": "",
             "extraction_note": "Binary file stored with metadata only.",
+        }
+
+    def _extract_document_file(self, file_path: Path) -> dict[str, Any]:
+        try:
+            parsed = self.parser_pipeline.parse(file_path)
+        except Exception as exc:
+            return {
+                "extractor": "document_parser_error",
+                "extracted_text": "",
+                "extraction_note": "Document parsing failed; stored metadata only.",
+                "document_error": str(exc),
+            }
+        return {
+            "extractor": parsed.parser,
+            "extracted_text": parsed.text[:8000],
+            "extraction_note": "Document text extracted by parser pipeline.",
+            "document_modality": parsed.modality,
+            **parsed.metadata,
         }
 
     def _extract_text_file(self, file_path: Path) -> dict[str, Any]:
