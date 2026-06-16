@@ -111,6 +111,22 @@ class InMemoryGraphStore:
         )
         return True
 
+    def delete_entity(self, entity_id):
+        """Remove one entity and its attached edges.
+
+        The real graph backend exposes deletion; the in-memory stand-in follows
+        the same contract so cascade-delete tests exercise the full flow.
+        """
+
+        existed = entity_id in self.entities
+        self.entities.pop(entity_id, None)
+        self.relationships = [
+            edge
+            for edge in self.relationships
+            if edge.get("from") != entity_id and edge.get("to") != entity_id
+        ]
+        return existed
+
     def search_entities_by_name(self, name_pattern, entity_types=None, limit=5):
         terms = [term.lower() for term in str(name_pattern).split() if term.strip()]
         rows: list[dict[str, Any]] = []

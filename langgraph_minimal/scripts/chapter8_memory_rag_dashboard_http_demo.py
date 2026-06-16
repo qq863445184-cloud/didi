@@ -44,6 +44,7 @@ HTML = """<!doctype html>
     button.secondary { background: #475569; }
     pre { min-height: 520px; white-space: pre-wrap; overflow: auto; overflow-wrap: anywhere; background: #101827; color: #dbeafe; padding: 14px; border-radius: 8px; }
     .hint { margin-top: 8px; font-size: 12px; color: #64748b; }
+    .status { margin-top: 10px; padding: 10px; border-radius: 6px; background: #eef4ff; color: #1e3a8a; font-size: 13px; }
     @media (max-width: 820px) {
       main { grid-template-columns: 1fr; padding: 12px; }
       pre { min-height: 360px; }
@@ -55,6 +56,7 @@ HTML = """<!doctype html>
   <main>
     <section>
       <h2>操作</h2>
+      <div id="backendStatus" class="status">后端模式：加载中...</div>
       <button type="button" onclick="window.submitDashboardAction('/api/ingest-demo')">导入业务多模态示例</button>
       <div class="hint">示例按钮使用固定样例抽取文本；上传真实图片/音频时会走 OCR/ASR 抽取文本。</div>
 
@@ -76,8 +78,13 @@ HTML = """<!doctype html>
       <input id="documentId" value="perceptual:image:invoice_INV-2026-001.png" />
       <button type="button" class="secondary" onclick="window.deleteDashboardDocument()">删除文档</button>
 
+      <label>跨模态相似检索文件路径</label>
+      <input id="similarFilePath" placeholder="例如 memory_data/.../query.png 或 query.mp3" />
+      <button type="button" class="secondary" onclick="window.searchSimilarDashboardFile()">相似文件检索</button>
+
       <button type="button" class="secondary" onclick="window.submitDashboardAction('/api/inventory')">记忆库存</button>
       <button type="button" class="secondary" onclick="window.submitDashboardAction('/api/rag-inventory')">RAG文档库</button>
+      <button type="button" class="secondary" onclick="window.submitDashboardAction('/api/backend-status')">后端模式</button>
       <button type="button" class="secondary" onclick="window.submitDashboardAction('/api/trace')">Trace</button>
       <button type="button" class="secondary" onclick="window.submitDashboardAction('/api/reset')">重置当前知识库</button>
     </section>
@@ -88,6 +95,16 @@ HTML = """<!doctype html>
   </main>
   <script>
     function value(id) { return document.getElementById(id).value; }
+    window.refreshBackendStatus = async function() {
+      const status = document.getElementById('backendStatus');
+      try {
+        const response = await fetch('/api/backend-status', { method: 'POST', body: new URLSearchParams() });
+        const payload = await response.json();
+        status.textContent = `后端模式：${payload.backend_mode} | RAG：${payload.vector_store} | 文档库：${payload.document_store}`;
+      } catch (error) {
+        status.textContent = `后端模式：读取失败 ${error.message || error}`;
+      }
+    }
     window.askDashboardQuestion = function() {
       return window.submitDashboardAction('/api/ask', { question: value('question') });
     }
@@ -96,6 +113,9 @@ HTML = """<!doctype html>
     }
     window.deleteDashboardDocument = function() {
       return window.submitDashboardAction('/api/delete-document', { document_id: value('documentId') });
+    }
+    window.searchSimilarDashboardFile = function() {
+      return window.submitDashboardAction('/api/search-similar-file', { file_path: value('similarFilePath') });
     }
     window.submitDashboardAction = async function(url, payload = {}) {
       const output = document.getElementById('output');
@@ -147,6 +167,7 @@ HTML = """<!doctype html>
         setTimeout(() => window.pollUploadJob(jobId, start), 2000);
       }
     }
+    window.refreshBackendStatus();
   </script>
 </body>
 </html>
@@ -164,10 +185,12 @@ def build_http_dashboard():
     persistent = _env_flag("CHAPTER8_DASHBOARD_PERSISTENT", default=False)
     real_llm = _env_flag("CHAPTER8_DASHBOARD_REAL_LLM", default=True)
     real_multimodal = _env_flag("CHAPTER8_DASHBOARD_REAL_MULTIMODAL", default=True)
+    cross_modal_embeddings = _env_flag("CHAPTER8_DASHBOARD_CROSS_MODAL_EMBEDDINGS", default=False)
     if not persistent:
         return build_dashboard_demo(
             prefer_real_llm=real_llm,
             prefer_real_multimodal=real_multimodal,
+            enable_cross_modal_embeddings=cross_modal_embeddings,
         )
 
     return build_persistent_dashboard_demo(
@@ -175,6 +198,7 @@ def build_http_dashboard():
         prefer_real_llm=real_llm,
         prefer_real_multimodal=real_multimodal,
         prefer_external_backends=_env_flag("CHAPTER8_DASHBOARD_EXTERNAL_BACKENDS", default=False),
+        enable_cross_modal_embeddings=cross_modal_embeddings,
         strict_backends=_env_flag("CHAPTER8_DASHBOARD_STRICT_BACKENDS", default=False),
     )
 
@@ -220,7 +244,9 @@ class DashboardHTTPHandler(BaseHTTPRequestHandler):
             "/api/recall": lambda: self.dashboard.recall(form.get("query", "")),
             "/api/inventory": self.dashboard.memory_inventory,
             "/api/rag-inventory": self.dashboard.rag_inventory,
+            "/api/backend-status": self.dashboard.backend_inventory,
             "/api/delete-document": lambda: self.dashboard.delete_document(form.get("document_id", "")),
+            "/api/search-similar-file": lambda: self.dashboard.search_similar_file(form.get("file_path", "")),
             "/api/trace": self.dashboard.trace,
             "/api/reset": self._reset_dashboard,
         }

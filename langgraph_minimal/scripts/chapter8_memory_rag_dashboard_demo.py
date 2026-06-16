@@ -35,6 +35,7 @@ def build_dashboard_demo(
     *,
     prefer_real_llm: bool = False,
     prefer_real_multimodal: bool = False,
+    enable_cross_modal_embeddings: bool = False,
     image_ocr: Callable[[Path], str] | None = None,
     audio_asr: Callable[[Path], str] | None = None,
 ) -> MemoryRAGDashboard:
@@ -56,6 +57,7 @@ def build_dashboard_demo(
         return _build_real_multimodal_dashboard(
             llm=llm,
             llm_mode=llm_mode,
+            enable_cross_modal_embeddings=enable_cross_modal_embeddings,
             image_ocr=image_ocr,
             audio_asr=audio_asr,
         )
@@ -78,6 +80,7 @@ def build_persistent_dashboard_demo(
     prefer_real_llm: bool = False,
     prefer_real_multimodal: bool = True,
     prefer_external_backends: bool = False,
+    enable_cross_modal_embeddings: bool = False,
     strict_backends: bool = False,
     image_ocr: Callable[[Path], str] | None = None,
     audio_asr: Callable[[Path], str] | None = None,
@@ -152,8 +155,8 @@ def build_persistent_dashboard_demo(
         audio_asr=audio_asr or (_real_audio_asr if prefer_real_multimodal else None),
         enable_ocr=prefer_real_multimodal,
         enable_asr=prefer_real_multimodal,
-        enable_image_embedding=False,
-        enable_audio_embedding=False,
+        enable_image_embedding=enable_cross_modal_embeddings,
+        enable_audio_embedding=enable_cross_modal_embeddings,
         model_root=ROOT / "models",
         multimodal_worker=_external_multimodal_worker(),
         external_timeout_seconds=_dashboard_multimodal_timeout(),
@@ -171,6 +174,7 @@ def _build_real_multimodal_dashboard(
     *,
     llm,
     llm_mode: str,
+    enable_cross_modal_embeddings: bool,
     image_ocr: Callable[[Path], str] | None,
     audio_asr: Callable[[Path], str] | None,
 ) -> MemoryRAGDashboard:
@@ -206,8 +210,8 @@ def _build_real_multimodal_dashboard(
         audio_asr=audio_asr or _real_audio_asr,
         enable_ocr=True,
         enable_asr=True,
-        enable_image_embedding=False,
-        enable_audio_embedding=False,
+        enable_image_embedding=enable_cross_modal_embeddings,
+        enable_audio_embedding=enable_cross_modal_embeddings,
         model_root=ROOT / "models",
         multimodal_worker=external_worker if use_external_runtime else None,
         external_timeout_seconds=_dashboard_multimodal_timeout(),

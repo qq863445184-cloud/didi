@@ -53,20 +53,65 @@ class MemoryRAGDashboard:
         )
 
     def delete_document(self, document_id: str | None) -> str:
-        """Delete one RAG document from metadata and retrievable chunks."""
+        """Delete one RAG document and any perception memories derived from it."""
 
         normalized = (document_id or "").strip()
         if not normalized:
             return "请输入要删除的文档 ID。"
         if self.rag_tool is None:
             return "未配置 RAG 工具，无法删除文档。"
-        return self.rag_tool.run(
+        rag_result = self.rag_tool.run(
             {
                 "action": "delete_document",
                 "document_id": normalized,
                 "namespace": self.rag_namespace,
             }
         )
+        cascade = self._cascade_delete_document(normalized)
+        if cascade["memory_deleted"] <= 0 and cascade["trace_deleted"] <= 0:
+            return rag_result
+        return "\n".join(
+            [
+                rag_result,
+                f"关联记忆删除数: {cascade['memory_deleted']}",
+                f"关联 trace 清理数: {cascade['trace_deleted']}",
+            ]
+        )
+
+    def backend_status(self) -> dict[str, Any]:
+        """Expose the active backend shape for the browser dashboard.
+
+        第八章同时讲轻量 demo 和生产式后端。页面需要直接告诉使用者当前
+        是内存版、SQLite 持久化版，还是 Qdrant + Neo4j + SQLite 组合。
+        """
+
+        raw_mode = str(getattr(self.rag_tool, "backend_mode", "") or "")
+        if raw_mode == "qdrant_neo4j_sqlite":
+            backend_mode = "qdrant+neo4j+sqlite"
+        elif raw_mode == "local_persistent":
+            backend_mode = "sqlite"
+        else:
+            backend_mode = "in-memory"
+
+        document_store = getattr(self.rag_tool, "document_store", None)
+        vector_store = getattr(self.rag_tool, "vector_store", None)
+        graph_store = None
+        if self.memory_manager is not None and "episodic" in self.memory_manager.stores:
+            graph_store = getattr(self.memory_manager.stores["episodic"], "graph_store", None)
+        return {
+            "backend_mode": backend_mode,
+            "raw_backend_mode": raw_mode or "memory_demo",
+            "rag_collection": getattr(self.rag_tool, "collection_name", ""),
+            "rag_namespace": self.rag_namespace,
+            "document_store": type(document_store).__name__ if document_store is not None else "none",
+            "document_store_path": str(getattr(document_store, "path", "")),
+            "vector_store": type(vector_store).__name__ if vector_store is not None else "none",
+            "graph_store": type(graph_store).__name__ if graph_store is not None else "none",
+            "llm_mode": str(getattr(self.rag_tool, "llm_mode", "unknown")),
+        }
+
+    def backend_inventory(self) -> str:
+        return json.dumps(self.backend_status(), ensure_ascii=False, indent=2)
 
     def ingest_file(
         self,
@@ -145,6 +190,28 @@ class MemoryRAGDashboard:
             )
         return "\n".join(lines)
 
+    def search_similar_file(
+        self,
+        file_path: str | Path | None,
+        *,
+        modality: str | None = None,
+        limit: int = 5,
+    ) -> str:
+        """Search perceptual memories by image/audio embedding."""
+
+        if not file_path:
+            return "请先输入要相似检索的文件路径。"
+        if self.perception_tool is None:
+            return "未配置感知工具，无法执行跨模态相似检索。"
+        payload: dict[str, Any] = {
+            "action": "search_file",
+            "file_path": str(file_path),
+            "limit": limit,
+        }
+        if modality:
+            payload["modality"] = modality
+        return self.perception_tool.run(payload)
+
     def memory_inventory(self) -> str:
         if self.memory_manager is not None:
             payload = self.memory_manager.stats()
@@ -203,6 +270,125 @@ class MemoryRAGDashboard:
         for source in (self.perception_tool, self.rag_tool, self.memory_manager, self.assistant):
             events.extend(list(getattr(source, "trace_events", []) or []))
         return events
+
+    def _cascade_delete_document(self, document_id: str) -> dict[str, int]:
+        if self.memory_manager is None:
+            return {"memory_deleted": 0, "trace_deleted": self._delete_trace_events(document_id)}
+
+        target_file_name = self._perceptual_document_file_name(document_id)
+        deleted = 0
+        trace_needles: list[str] = []
+        for memory_type, store in self.memory_manager.stores.items():
+            for record in list(store.all_records()):
+                metadata = record.metadata or {}
+                if not self._record_belongs_to_document(
+                    metadata,
+                    document_id=document_id,
+                    target_file_name=target_file_name,
+                ):
+                    continue
+                if store.delete(record.memory_id):
+                    deleted += 1
+                    trace_needles.extend(self._trace_needles_for_record(record.content, metadata))
+                    self.memory_manager.trace_events.append(
+                        {
+                            "stage": "dashboard.cascade_delete_memory",
+                            "document_id": document_id,
+                            "memory_type": memory_type,
+                            "memory_id": record.memory_id,
+                        }
+                    )
+
+        return {
+            "memory_deleted": deleted,
+            "trace_deleted": self._delete_trace_events(
+                document_id,
+                extra_needles=trace_needles,
+            ),
+        }
+
+    def _record_belongs_to_document(
+        self,
+        metadata: dict[str, Any],
+        *,
+        document_id: str,
+        target_file_name: str,
+    ) -> bool:
+        if metadata.get("rag_document_id") == document_id:
+            return True
+        file_path = str(metadata.get("file_path") or "")
+        if target_file_name and Path(file_path).name == target_file_name:
+            return True
+        if metadata.get("source") != "perception":
+            return False
+        return False
+
+    def _perceptual_document_file_name(self, document_id: str) -> str:
+        if document_id.startswith("perceptual:"):
+            return document_id.rsplit(":", 1)[-1]
+        return ""
+
+    def _trace_needles_for_record(
+        self,
+        content: str,
+        metadata: dict[str, Any],
+    ) -> list[str]:
+        needles = [
+            str(metadata.get("extracted_text") or ""),
+            str(metadata.get("description") or ""),
+        ]
+        # Keep a few meaningful chunks from the memory content.  This catches
+        # prior ask/search trace entries that contain sensitive uploaded text
+        # but no longer mention the file name after query rewriting/reranking.
+        for part in str(content).replace("\n", " ").split():
+            if len(part) >= 8:
+                needles.append(part)
+        return [needle for needle in dict.fromkeys(needles) if len(needle) >= 8]
+
+    def _delete_trace_events(
+        self,
+        document_id: str,
+        *,
+        extra_needles: list[str] | None = None,
+    ) -> int:
+        target_file_name = self._perceptual_document_file_name(document_id)
+        removed = 0
+        for source in (self.perception_tool, self.rag_tool, self.memory_manager, self.assistant):
+            events = getattr(source, "trace_events", None)
+            if not isinstance(events, list):
+                continue
+            kept = []
+            for event in events:
+                if self._trace_event_belongs_to_document(
+                    event,
+                    document_id=document_id,
+                    target_file_name=target_file_name,
+                    extra_needles=extra_needles or [],
+                ):
+                    removed += 1
+                    continue
+                kept.append(event)
+            events[:] = kept
+        return removed
+
+    def _trace_event_belongs_to_document(
+        self,
+        event: dict[str, Any],
+        *,
+        document_id: str,
+        target_file_name: str,
+        extra_needles: list[str],
+    ) -> bool:
+        if event.get("document_id") == document_id:
+            return True
+        text = json.dumps(event, ensure_ascii=False)
+        if document_id in text:
+            return True
+        if target_file_name and target_file_name in text:
+            return True
+        if any(needle and needle in text for needle in extra_needles):
+            return True
+        return False
 
     def _format_retrieved_chunks(
         self,
