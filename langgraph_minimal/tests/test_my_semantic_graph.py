@@ -54,6 +54,17 @@ class FakeGraphStore:
         )
         return True
 
+    def delete_entity(self, entity_id):
+        if entity_id not in self.entities:
+            return False
+        del self.entities[entity_id]
+        self.relationships = [
+            rel
+            for rel in self.relationships
+            if rel["from"] != entity_id and rel["to"] != entity_id
+        ]
+        return True
+
 
 def test_semantic_memory_writes_extracted_entities_to_graph():
     graph_store = FakeGraphStore()
@@ -121,3 +132,29 @@ def test_semantic_memory_recalls_records_through_entity_graph_when_vector_misses
     assert results[0].source == "semantic_graph"
     assert results[0].record.content == "Python 是构建 Agent 工具链时常用的语言。"
     assert results[0].record.access_count == 1
+
+
+def test_semantic_memory_delete_removes_graph_node_and_relationships():
+    graph_store = FakeGraphStore()
+    store = SemanticMemoryStore(
+        embedder=FakeEmbedder(),
+        vector_store=FakeVectorStore(),
+        graph_store=graph_store,
+        entity_extractor=FakeEntityExtractor(),
+    )
+    record = store.add(
+        MemoryRecord(
+            content="Python 是构建 Agent 工具链时常用的语言。",
+            memory_type="semantic",
+        )
+    )
+
+    deleted = store.delete(record.memory_id)
+
+    assert deleted is True
+    assert f"semantic:{record.memory_id}" not in graph_store.entities
+    assert all(
+        rel["from"] != f"semantic:{record.memory_id}"
+        and rel["to"] != f"semantic:{record.memory_id}"
+        for rel in graph_store.relationships
+    )

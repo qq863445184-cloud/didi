@@ -685,6 +685,14 @@ class SemanticMemoryStore:
                 deleter([memory_id])
             except Exception:
                 pass
+        graph_deleter = getattr(self.graph_store, "delete_entity", None)
+        if graph_deleter is not None:
+            try:
+                graph_deleter(entity_id=f"semantic:{memory_id}")
+            except TypeError:
+                graph_deleter(f"semantic:{memory_id}")
+            except Exception:
+                pass
         return found
 
     def update(self, memory_id: str, **changes: Any) -> MemoryRecord | None:
