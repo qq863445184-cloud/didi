@@ -7,6 +7,7 @@ from app.my_memory_system import (
     EpisodicMemoryStore,
     MyMemoryManager,
     MyMemoryTool,
+    NoteTool,
     MyPerceptionTool,
     MyRAGTool,
     PDFLearningAssistant,
@@ -58,6 +59,18 @@ def test_chapter8_memory_tool_exposes_lifecycle_operations():
     }
     for parameters in minimal_parameters.values():
         assert tool.validate_parameters(parameters)
+
+
+def test_chapter9_note_tool_exposes_task_note_operations(tmp_path):
+    tool = NoteTool(path=tmp_path / "notes.jsonl")
+    names = parameter_names(tool)
+
+    assert tool.name == "note"
+    assert {"action", "content", "query", "note_id", "tags", "importance"}.issubset(names)
+    assert tool.validate_parameters({"action": "add", "content": "记录上下文选择策略"})
+    assert tool.validate_parameters({"action": "search", "query": "上下文"})
+    assert tool.validate_parameters({"action": "list"})
+    assert tool.validate_parameters({"action": "stats"})
 
 
 def test_chapter8_memory_layers_are_available():
