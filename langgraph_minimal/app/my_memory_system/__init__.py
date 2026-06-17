@@ -1,5 +1,6 @@
 from .manager import MyMemoryManager
 from app.note_tool import NoteTool
+from app.terminal_tool import TerminalTool
 from .document_learning_assistant import (
     DocumentLearningAnswer,
     DocumentLearningAssistant,
@@ -42,6 +43,7 @@ __all__ = [
     "MyMemoryManager",
     "MyMemoryTool",
     "NoteTool",
+    "TerminalTool",
     "MyPerceptionTool",
     "MyRAGTool",
     "ClipImageEmbedder",
