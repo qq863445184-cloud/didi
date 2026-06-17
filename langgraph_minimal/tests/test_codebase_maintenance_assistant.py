@@ -3,6 +3,15 @@ from __future__ import annotations
 from app.codebase_maintenance_assistant import CodebaseMaintenanceAssistant
 
 
+class FakeMaintenanceLLM:
+    def __init__(self) -> None:
+        self.last_messages = []
+
+    def invoke(self, messages, **kwargs):
+        self.last_messages = messages
+        return "建议先阅读 service.py，再拆分 load_user 的职责，并持续追踪重构任务。"
+
+
 def test_codebase_maintenance_assistant_explores_records_tasks_and_builds_context(tmp_path):
     app_dir = tmp_path / "app"
     app_dir.mkdir()
@@ -75,3 +84,47 @@ def test_codebase_maintenance_assistant_can_resume_long_refactor_notes(tmp_path)
 
     assert "Introduce service layer" in context
     assert "长期任务" in context
+
+
+def test_codebase_maintenance_assistant_run_modes_keep_history_and_auto_notes(tmp_path):
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+    (app_dir / "service.py").write_text(
+        "def load_user(user_id):\n"
+        "    # TODO: split this function\n"
+        "    return user_id\n",
+        encoding="utf-8",
+    )
+    llm = FakeMaintenanceLLM()
+    assistant = CodebaseMaintenanceAssistant(
+        root=tmp_path,
+        note_path=tmp_path / "notes.jsonl",
+        context_max_tokens=520,
+        llm=llm,
+    )
+
+    response = assistant.run("分析 app/service.py 的维护风险", mode="analyze")
+
+    assert "拆分 load_user" in response
+    assert len(assistant.conversation_history) == 2
+    assert "[Evidence]" in llm.last_messages[-1]["content"]
+    assert any(note["title"] == "analyze: 分析 app/service.py 的维护风险" for note in assistant.note_tool.notes)
+    assert any(event["stage"] == "maintenance.run" for event in assistant.trace_events)
+
+
+def test_codebase_maintenance_assistant_reports_stats(tmp_path):
+    (tmp_path / "main.py").write_text("# TODO: add tests\n", encoding="utf-8")
+    assistant = CodebaseMaintenanceAssistant(root=tmp_path, note_path=tmp_path / "notes.jsonl")
+
+    assistant.explore()
+    assistant.record_issue(title="Missing tests", content="main.py 需要补充测试。", path="main.py")
+    assistant.track_refactor_task(title="Add tests", content="为 main.py 增加 smoke test。", path="main.py")
+
+    stats = assistant.get_stats()
+    report = assistant.generate_report()
+
+    assert stats["notes"] == 2
+    assert stats["history_messages"] == 0
+    assert "代码库维护报告" in report
+    assert "Missing tests" in report
+    assert "Add tests" in report

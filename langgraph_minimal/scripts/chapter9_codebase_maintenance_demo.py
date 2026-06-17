@@ -11,6 +11,16 @@ if str(ROOT) not in sys.path:
 from app.codebase_maintenance_assistant import CodebaseMaintenanceAssistant
 
 
+class DemoLLM:
+    """Tiny deterministic LLM stand-in so the demo is stable offline."""
+
+    def invoke(self, messages, **kwargs):
+        return (
+            "建议先围绕 app/service.py 的 TODO 建立小步重构计划："
+            "抽取 validate_user_id、fetch_user、format_user_response，并把任务继续写入笔记。"
+        )
+
+
 def main() -> None:
     demo_root = ROOT / "memory_data" / "chapter9_codebase_maintenance_demo"
     app_dir = demo_root / "app"
@@ -28,11 +38,14 @@ def main() -> None:
         "    return {'id': user_id, 'name': 'demo'}\n",
         encoding="utf-8",
     )
+    note_path = demo_root / "maintenance_notes.jsonl"
+    note_path.unlink(missing_ok=True)
 
     assistant = CodebaseMaintenanceAssistant(
         root=demo_root,
-        note_path=demo_root / "maintenance_notes.jsonl",
+        note_path=note_path,
         context_max_tokens=900,
+        llm=DemoLLM(),
     )
 
     explore = assistant.explore([".", "app"])
@@ -52,6 +65,12 @@ def main() -> None:
     context = assistant.build_maintenance_context(
         "下一步如何维护 app/service.py，并保证长期重构任务不断线？"
     )
+    answer = assistant.run(
+        "分析 app/service.py 的维护风险，并给出下一步计划",
+        mode="analyze",
+    )
+    stats = assistant.get_stats()
+    report = assistant.generate_report()
 
     print("[explore.structure]")
     print(explore.structure)
@@ -63,6 +82,12 @@ def main() -> None:
     print(task)
     print("\n[maintenance context]")
     print(context.context)
+    print("\n[run analyze answer]")
+    print(answer)
+    print("\n[stats]")
+    print(json.dumps(stats, ensure_ascii=False, indent=2))
+    print("\n[report]")
+    print(report)
     print("\n[trace]")
     print(
         json.dumps(
