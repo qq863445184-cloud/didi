@@ -108,7 +108,7 @@ def test_codebase_maintenance_assistant_run_modes_keep_history_and_auto_notes(tm
     assert "拆分 load_user" in response
     assert len(assistant.conversation_history) == 2
     assert "[Evidence]" in llm.last_messages[-1]["content"]
-    assert any(note["title"] == "analyze: 分析 app/service.py 的维护风险" for note in assistant.note_tool.notes)
+    assert any(note["title"] == "Day 1 - analyze: 分析 app/service.py 的维护风险" for note in assistant.note_tool.notes)
     assert any(event["stage"] == "maintenance.run" for event in assistant.trace_events)
 
 
@@ -128,3 +128,28 @@ def test_codebase_maintenance_assistant_reports_stats(tmp_path):
     assert "代码库维护报告" in report
     assert "Missing tests" in report
     assert "Add tests" in report
+
+
+def test_codebase_maintenance_assistant_assigns_day_numbers_to_runs(tmp_path):
+    (tmp_path / "main.py").write_text("# TODO: refactor startup\n", encoding="utf-8")
+    assistant = CodebaseMaintenanceAssistant(
+        root=tmp_path,
+        note_path=tmp_path / "notes.jsonl",
+        llm=FakeMaintenanceLLM(),
+    )
+
+    assistant.run("初次探索代码库", mode="explore")
+    assistant.run("继续分析启动流程", mode="analyze")
+
+    assert assistant.maintenance_day == 2
+    assert assistant.conversation_history[0]["day"] == 1
+    assert assistant.conversation_history[2]["day"] == 2
+    assert any(note["title"].startswith("Day 1 - explore") for note in assistant.note_tool.notes)
+    assert any(note["title"].startswith("Day 2 - analyze") for note in assistant.note_tool.notes)
+
+    stats = assistant.get_stats()
+    report = assistant.generate_report()
+    assert stats["maintenance_day"] == 2
+    assert "maintenance_day: 2" in report
+    assert "Day 1 - explore" in report
+    assert "Day 2 - analyze" in report

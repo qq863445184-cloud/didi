@@ -54,6 +54,7 @@ class CodebaseMaintenanceAssistant:
         self.memory_tool = memory_tool or MyMemoryTool(user_id=user_id)
         self.llm = llm
         self.context_config = ContextConfig(max_tokens=context_max_tokens)
+        self.maintenance_day = 0
         self.conversation_history: list[dict[str, Any]] = []
         self.trace_events: list[dict[str, Any]] = []
 
@@ -65,6 +66,7 @@ class CodebaseMaintenanceAssistant:
         """
 
         normalized_mode = self._normalize_mode(mode)
+        day = self._next_maintenance_day()
         self._preprocess_by_mode(user_input, normalized_mode)
         context_result = self.build_maintenance_context(
             self._mode_question(user_input, normalized_mode)
@@ -74,18 +76,20 @@ class CodebaseMaintenanceAssistant:
         response = self._postprocess_response(
             user_input=user_input,
             mode=normalized_mode,
+            day=day,
             response=response,
             context_result=context_result,
         )
         self.conversation_history.extend(
             [
-                {"role": "user", "content": user_input, "mode": normalized_mode},
-                {"role": "assistant", "content": response, "mode": normalized_mode},
+                {"role": "user", "content": user_input, "mode": normalized_mode, "day": day},
+                {"role": "assistant", "content": response, "mode": normalized_mode, "day": day},
             ]
         )
         self.trace_events.append(
             {
                 "stage": "maintenance.run",
+                "day": day,
                 "mode": normalized_mode,
                 "input": user_input,
                 "history_messages": len(self.conversation_history),
@@ -317,6 +321,7 @@ class CodebaseMaintenanceAssistant:
 
         stats = {
             "root": str(self.root),
+            "maintenance_day": self.maintenance_day,
             "notes": len(self.note_tool.notes),
             "history_messages": len(self.conversation_history),
             "trace_events": len(self.trace_events),
@@ -338,6 +343,7 @@ class CodebaseMaintenanceAssistant:
         return (
             "# 代码库维护报告\n\n"
             f"- root: {stats['root']}\n"
+            f"- maintenance_day: {stats['maintenance_day']}\n"
             f"- notes: {stats['notes']}\n"
             f"- history_messages: {stats['history_messages']}\n\n"
             "## 维护笔记\n"
@@ -349,6 +355,13 @@ class CodebaseMaintenanceAssistant:
         if normalized not in {"auto", "explore", "analyze", "plan", "refactor"}:
             return "auto"
         return normalized
+
+    def _next_maintenance_day(self) -> int:
+        self.maintenance_day += 1
+        self.trace_events.append(
+            {"stage": "maintenance.day", "day": self.maintenance_day}
+        )
+        return self.maintenance_day
 
     def _preprocess_by_mode(self, user_input: str, mode: str) -> None:
         if mode == "explore":
@@ -403,14 +416,16 @@ class CodebaseMaintenanceAssistant:
         *,
         user_input: str,
         mode: str,
+        day: int,
         response: str,
         context_result: ContextBuildResult,
     ) -> str:
         self.note_tool.run(
             {
                 "action": "add",
-                "title": f"{mode}: {user_input}",
+                "title": f"Day {day} - {mode}: {user_input}",
                 "content": (
+                    f"day={day}\n"
                     f"mode={mode}\n"
                     f"context_tokens={context_result.total_tokens}\n"
                     f"assistant_response={response}"
@@ -423,13 +438,14 @@ class CodebaseMaintenanceAssistant:
             {
                 "action": "add",
                 "memory_type": "working",
-                "content": f"完成一次 {mode} 模式维护问答：{user_input}",
+                "content": f"Day {day} 完成一次 {mode} 模式维护问答：{user_input}",
                 "importance": 0.6,
             }
         )
         self.trace_events.append(
             {
                 "stage": "maintenance.postprocess",
+                "day": day,
                 "mode": mode,
                 "context_tokens": context_result.total_tokens,
             }

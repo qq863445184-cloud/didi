@@ -69,6 +69,10 @@ def main() -> None:
         "分析 app/service.py 的维护风险，并给出下一步计划",
         mode="analyze",
     )
+    second_answer = assistant.run(
+        "继续推进 load_user 拆分，并说明今天要保持哪些上下文",
+        mode="plan",
+    )
     stats = assistant.get_stats()
     report = assistant.generate_report()
 
@@ -84,6 +88,8 @@ def main() -> None:
     print(context.context)
     print("\n[run analyze answer]")
     print(answer)
+    print("\n[run plan answer]")
+    print(second_answer)
     print("\n[stats]")
     print(json.dumps(stats, ensure_ascii=False, indent=2))
     print("\n[report]")
