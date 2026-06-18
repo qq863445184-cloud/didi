@@ -15,9 +15,22 @@ class DemoLLM:
     """Tiny deterministic LLM stand-in so the demo is stable offline."""
 
     def invoke(self, messages, **kwargs):
+        prompt = messages[-1]["content"]
+        if "请结合长期笔记制定下一步计划" in prompt:
+            return (
+                "今天延续 Day 1 的结论，不再重新探索全仓。"
+                "保留的关键上下文是：app/service.py 存在职责混合、TODO 指向拆分函数、"
+                "长期任务是拆出 validate_user_id、fetch_user、format_user_response。"
+                "本轮计划是先写一个覆盖 load_user 当前行为的测试，再按这三个函数逐步重构。"
+            )
+        if "请分析代码维护风险" in prompt:
+            return (
+                "今天的重点是风险诊断：app/service.py 的 load_user 把参数校验、"
+                "数据读取和响应格式整理放在一个函数里，TODO 已经暴露出职责混合。"
+                "建议把这个发现写入维护笔记，并建立后续拆分任务。"
+            )
         return (
-            "建议先围绕 app/service.py 的 TODO 建立小步重构计划："
-            "抽取 validate_user_id、fetch_user、format_user_response，并把任务继续写入笔记。"
+            "已基于当前上下文完成代码库维护分析。"
         )
 
 
