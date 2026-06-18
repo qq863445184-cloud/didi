@@ -69,10 +69,12 @@ def main() -> None:
         "分析 app/service.py 的维护风险，并给出下一步计划",
         mode="analyze",
     )
+    analyze_day = assistant.maintenance_day
     second_answer = assistant.run(
         "继续推进 load_user 拆分，并说明今天要保持哪些上下文",
         mode="plan",
     )
+    plan_day = assistant.maintenance_day
     stats = assistant.get_stats()
     report = assistant.generate_report()
 
@@ -86,9 +88,9 @@ def main() -> None:
     print(task)
     print("\n[maintenance context]")
     print(context.context)
-    print("\n[run analyze answer]")
+    print(f"\n[Day {analyze_day} - analyze]")
     print(answer)
-    print("\n[run plan answer]")
+    print(f"\n[Day {plan_day} - plan]")
     print(second_answer)
     print("\n[stats]")
     print(json.dumps(stats, ensure_ascii=False, indent=2))
