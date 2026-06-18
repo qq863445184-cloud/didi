@@ -71,6 +71,21 @@ def main() -> None:
 
     print("[context]")
     print(result.context)
+    print("\n[quality]")
+    print(
+        json.dumps(
+            {
+                "information_density": round(result.quality.information_density, 3),
+                "relevance": round(result.quality.relevance, 3),
+                "completeness": round(result.quality.completeness, 3),
+                "overall_score": round(result.quality.overall_score, 3),
+                "suggestions": result.quality.suggestions,
+                "details": result.quality.details,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
     print("\n[trace]")
     print(json.dumps(result.trace, ensure_ascii=False, indent=2))
 

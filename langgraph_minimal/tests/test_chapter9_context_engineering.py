@@ -6,6 +6,7 @@ from app.context_engineering import (
     ContextBuilder,
     ContextConfig,
     ContextPacket,
+    ContextQualityReport,
     estimate_tokens,
     lexical_relevance,
 )
@@ -112,3 +113,50 @@ def test_lexical_relevance_and_token_estimator_are_deterministic():
     assert lexical_relevance("RAG 上下文工程需要证据", "RAG 证据") > 0
     assert lexical_relevance("天气很好", "RAG 证据") == 0
     assert estimate_tokens("RAG 上下文工程") == estimate_tokens("RAG 上下文工程")
+
+
+def test_context_builder_reports_quality_metrics_and_suggestions():
+    builder = ContextBuilder(
+        config=ContextConfig(max_tokens=500, reserve_ratio=0.0, min_relevance=0.0)
+    )
+
+    result = builder.build(
+        user_query="如何重构 load_user？",
+        system_instructions="基于证据回答。",
+        custom_packets=[
+            ContextPacket(
+                content="app/service.py 的 load_user 需要拆出 validate_user_id 和 fetch_user。",
+                source="terminal",
+                relevance_score=0.9,
+                metadata={"section": "evidence"},
+            ),
+            ContextPacket(
+                content="天气很好，午饭可以吃面。",
+                source="noise",
+                relevance_score=0.0,
+                metadata={"section": "context"},
+            ),
+        ],
+        output_instructions="给出下一步计划。",
+    )
+
+    assert isinstance(result.quality, ContextQualityReport)
+    assert 0.0 <= result.quality.information_density <= 1.0
+    assert 0.0 <= result.quality.relevance <= 1.0
+    assert 0.0 <= result.quality.completeness <= 1.0
+    assert result.quality.overall_score <= 1.0
+    assert any("移除或降权低相关" in suggestion for suggestion in result.quality.suggestions)
+    assert any(event["stage"] == "context.quality" for event in result.trace)
+
+
+def test_context_builder_quality_warns_when_context_is_incomplete():
+    builder = ContextBuilder(config=ContextConfig(max_tokens=220, reserve_ratio=0.0))
+
+    result = builder.build(
+        user_query="如何重构 load_user？",
+        system_instructions="你是维护助手。",
+        custom_packets=[],
+    )
+
+    assert result.quality.completeness < 0.7
+    assert any("补充 Evidence" in suggestion for suggestion in result.quality.suggestions)

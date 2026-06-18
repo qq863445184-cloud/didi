@@ -65,6 +65,19 @@ class ContextBuildResult:
     packets: list[ContextPacket]
     total_tokens: int
     trace: list[dict[str, Any]]
+    quality: "ContextQualityReport"
+
+
+@dataclass
+class ContextQualityReport:
+    """Quality signals for one assembled context."""
+
+    information_density: float
+    relevance: float
+    completeness: float
+    overall_score: float
+    suggestions: list[str]
+    details: dict[str, Any] = field(default_factory=dict)
 
 
 class ContextBuilder:
@@ -118,6 +131,12 @@ class ContextBuilder:
         )
         context = self._compress_context(context)
         total_tokens = estimate_tokens(context)
+        quality = self._evaluate_quality(
+            context=context,
+            selected_packets=selected,
+            user_query=query,
+            total_tokens=total_tokens,
+        )
         self.trace_events.append(
             {
                 "stage": "context.build",
@@ -132,6 +151,7 @@ class ContextBuilder:
             packets=selected,
             total_tokens=total_tokens,
             trace=list(self.trace_events),
+            quality=quality,
         )
 
     def _gather(
@@ -405,6 +425,123 @@ class ContextBuilder:
         for packet in packets:
             counts[packet.source] = counts.get(packet.source, 0) + 1
         return counts
+
+    def _evaluate_quality(
+        self,
+        *,
+        context: str,
+        selected_packets: list[ContextPacket],
+        user_query: str,
+        total_tokens: int,
+    ) -> ContextQualityReport:
+        density = self._information_density(context=context, total_tokens=total_tokens)
+        relevance = self._selected_relevance(
+            selected_packets=selected_packets,
+            user_query=user_query,
+        )
+        completeness = self._section_completeness(context)
+        overall = _clamp(density * 0.3 + relevance * 0.4 + completeness * 0.3)
+        suggestions = self._quality_suggestions(
+            density=density,
+            relevance=relevance,
+            completeness=completeness,
+            selected_packets=selected_packets,
+            context=context,
+        )
+        report = ContextQualityReport(
+            information_density=density,
+            relevance=relevance,
+            completeness=completeness,
+            overall_score=overall,
+            suggestions=suggestions,
+            details={
+                "selected_packets": len(selected_packets),
+                "total_tokens": total_tokens,
+                "sections": sorted(self._present_sections(context)),
+                "sources": self._count_by_source(selected_packets),
+            },
+        )
+        self.trace_events.append(
+            {
+                "stage": "context.quality",
+                "information_density": round(report.information_density, 3),
+                "relevance": round(report.relevance, 3),
+                "completeness": round(report.completeness, 3),
+                "overall_score": round(report.overall_score, 3),
+                "suggestions": report.suggestions,
+            }
+        )
+        return report
+
+    def _information_density(self, *, context: str, total_tokens: int) -> float:
+        if total_tokens <= 0:
+            return 0.0
+        section_markers = len(re.findall(r"^\[[^\]]+\]$", context, flags=re.MULTILINE))
+        boilerplate_tokens = section_markers * 2
+        compressed_penalty = 0.15 if "[compressed]" in context else 0.0
+        signal_tokens = max(0, total_tokens - boilerplate_tokens)
+        return _clamp(signal_tokens / total_tokens - compressed_penalty)
+
+    def _selected_relevance(
+        self,
+        *,
+        selected_packets: list[ContextPacket],
+        user_query: str,
+    ) -> float:
+        scored: list[float] = []
+        for packet in selected_packets:
+            if packet.source == "system":
+                continue
+            score = packet.relevance_score
+            if score == 0.5:
+                score = lexical_relevance(packet.content, user_query)
+            scored.append(_clamp(score))
+        if not scored:
+            return 0.0
+        return _clamp(sum(scored) / len(scored))
+
+    def _section_completeness(self, context: str) -> float:
+        present = self._present_sections(context)
+        expected = {"Role & Policies", "Task", "Evidence", "Context", "Output"}
+        required = {"Role & Policies", "Task", "Evidence", "Output"}
+        required_score = len(required & present) / len(required)
+        optional_score = 0.1 if "Context" in present else 0.0
+        return _clamp(required_score * 0.9 + optional_score)
+
+    def _present_sections(self, context: str) -> set[str]:
+        return set(re.findall(r"^\[([^\]]+)\]$", context, flags=re.MULTILINE))
+
+    def _quality_suggestions(
+        self,
+        *,
+        density: float,
+        relevance: float,
+        completeness: float,
+        selected_packets: list[ContextPacket],
+        context: str,
+    ) -> list[str]:
+        suggestions: list[str] = []
+        low_relevance_packets = [
+            packet
+            for packet in selected_packets
+            if packet.source != "system" and packet.relevance_score < 0.2
+        ]
+        present = self._present_sections(context)
+        if density < 0.55:
+            suggestions.append("提升信息密度：减少模板化文字，优先保留包含事实、路径、约束和结论的片段。")
+        if relevance < 0.6 or low_relevance_packets:
+            suggestions.append("移除或降权低相关上下文，避免噪声挤占 token 预算。")
+        if "Evidence" not in present:
+            suggestions.append("补充 Evidence：加入代码、文档、RAG 或工具检索到的可验证证据。")
+        if "Output" not in present:
+            suggestions.append("补充 Output：明确回答格式、粒度和约束。")
+        if completeness < 0.7 and "Evidence" in present:
+            suggestions.append("补齐上下文结构：确保 Role、Task、Evidence、Context、Output 至少覆盖核心区块。")
+        if "[compressed]" in context:
+            suggestions.append("检查压缩结果：确认关键实体、路径、数值和行动项没有被截断。")
+        if not suggestions:
+            suggestions.append("上下文质量良好：保持当前证据、历史和输出约束的比例。")
+        return suggestions
 
 
 def estimate_tokens(text: str) -> int:
