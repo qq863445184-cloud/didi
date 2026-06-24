@@ -59,8 +59,7 @@ This package includes `smithery.yaml` for platform-style publishing.
 
 ## Docker
 
-Build from the repository root so the Dockerfile can copy the shared `app/`
-implementation:
+Build from the repository root:
 
 ```bash
 docker build -f weather-mcp-server/Dockerfile -t weather-mcp-server .
