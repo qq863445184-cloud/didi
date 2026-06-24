@@ -1,0 +1,13 @@
+[project]
+name = "weather-mcp-server"
+version = "0.1.0"
+description = "A lightweight MCP server for current weather and forecasts using Open-Meteo."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp>=1.0.0",
+    "fastmcp>=2.0.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = [".."]

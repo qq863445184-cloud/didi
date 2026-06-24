@@ -26,14 +26,27 @@ Windows virtualenv example:
 
 ## MCP Client Config
 
-Use a relative command from the project root when registering this server with
-an MCP client or publishing platform:
+For a chapter demo, use the project-level server:
 
 ```json
 {
   "command": "python",
   "args": ["app/weather_mcp_server.py"]
 }
+```
+
+For platform-style publishing, use the package under `weather-mcp-server/`,
+which follows the format shown in chapter 10.5.2:
+
+```text
+weather-mcp-server/
+├── README.md
+├── LICENSE
+├── Dockerfile
+├── pyproject.toml
+├── requirements.txt
+├── smithery.yaml
+└── server.py
 ```
 
 ## Demo
