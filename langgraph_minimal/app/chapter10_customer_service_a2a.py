@@ -2,20 +2,39 @@ from __future__ import annotations
 
 from typing import Any
 
+from hello_agents import SimpleAgent
 from hello_agents.protocols.a2a.implementation import A2A_AVAILABLE, A2AServer
 
 from app.chapter10_a2a_agent import call_a2a_skill
 
 
-def create_customer_service_agents() -> dict[str, A2AServer]:
+class ReceptionRouterLLM:
+    """Deterministic LLM stub for tests; replace with HelloAgentsLLM in real use."""
+
+    def invoke(self, messages: list[dict[str, str]], **_: Any) -> str:
+        text = messages[-1]["content"]
+        lowered = text.lower()
+        if any(word in text for word in ["登录", "报错", "接口", "崩溃", "无法使用"]) or any(
+            word in lowered for word in ["login", "error", "api", "crash", "bug"]
+        ):
+            return "technical"
+        if any(word in text for word in ["价格", "套餐", "购买", "试用", "发票"]) or any(
+            word in lowered for word in ["price", "pricing", "plan", "trial", "invoice"]
+        ):
+            return "sales"
+        return "human_review"
+
+
+def create_customer_service_agents(llm: Any | None = None) -> dict[str, A2AServer]:
     """Create a small A2A customer-service network.
 
     The reception agent owns routing, while domain agents own specialized
     answers. This mirrors the chapter 10.3.4 idea without requiring a running
     HTTP A2A service in tests.
     """
+    llm = llm or ReceptionRouterLLM()
     return {
-        "reception": _create_reception_agent(),
+        "reception": _create_reception_agent(llm),
         "technical": _create_technical_agent(),
         "sales": _create_sales_agent(),
         "human_review": _create_human_review_agent(),
@@ -25,9 +44,10 @@ def create_customer_service_agents() -> dict[str, A2AServer]:
 def handle_customer_request(
     question: str,
     agents: dict[str, A2AServer] | None = None,
+    llm: Any | None = None,
 ) -> dict[str, Any]:
     """Route one customer request through multiple A2A agents."""
-    agents = agents or create_customer_service_agents()
+    agents = agents or create_customer_service_agents(llm=llm)
     trace: list[dict[str, Any]] = []
 
     trace.append({"stage": "customer.request", "question": question})
@@ -80,30 +100,33 @@ def list_customer_service_agent_cards(agents: dict[str, A2AServer]) -> dict[str,
     return {name: agent.get_info() for name, agent in agents.items()}
 
 
-def _create_reception_agent() -> A2AServer:
+def _create_reception_agent(llm: Any) -> A2AServer:
     server = A2AServer(
         name="customer-reception-agent",
-        description="Classifies customer requests and routes them to specialist agents.",
+        description="Uses a SimpleAgent receptionist to route customer requests.",
         version="0.1.0",
         capabilities={
             "protocol": "A2A",
             "mode": "simulated" if not A2A_AVAILABLE else "sdk",
-            "skills": {"classify": "Classify a customer request into technical, sales, or human_review."},
+            "skills": {"classify": "Use a receptionist SimpleAgent to classify a request."},
         },
+    )
+    receptionist = SimpleAgent(
+        name="接待员",
+        llm=llm,
+        system_prompt=(
+            "你是客服接待员，负责：\n"
+            "1. 分析客户问题类型：technical、sales 或 human_review。\n"
+            "2. 只返回一个分类标签，不要输出解释。\n"
+            "3. 技术问题包括登录、报错、接口、崩溃、无法使用。\n"
+            "4. 销售问题包括价格、套餐、购买、试用、发票。\n"
+            "5. 模糊、敏感或需要人工介入的问题返回 human_review。"
+        ),
     )
 
     @server.skill("classify")
     def classify(text: str) -> str:
-        lowered = text.lower()
-        if any(word in text for word in ["登录", "报错", "接口", "崩溃", "无法使用"]) or any(
-            word in lowered for word in ["login", "error", "api", "crash", "bug"]
-        ):
-            return "technical"
-        if any(word in text for word in ["价格", "套餐", "购买", "试用", "发票"]) or any(
-            word in lowered for word in ["price", "pricing", "plan", "trial", "invoice"]
-        ):
-            return "sales"
-        return "human_review"
+        return _normalize_route(receptionist.run(text))
 
     return server
 
@@ -176,4 +199,13 @@ def _create_human_review_agent() -> A2AServer:
 def _route_to_agent_key(route: str) -> str:
     if route in {"technical", "sales", "human_review"}:
         return route
+    return "human_review"
+
+
+def _normalize_route(raw_route: str) -> str:
+    route = raw_route.strip().lower()
+    if "technical" in route or "技术" in route:
+        return "technical"
+    if "sales" in route or "销售" in route:
+        return "sales"
     return "human_review"

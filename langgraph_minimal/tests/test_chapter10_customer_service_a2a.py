@@ -1,10 +1,20 @@
 from __future__ import annotations
 
 from app.chapter10_customer_service_a2a import (
+    ReceptionRouterLLM,
     create_customer_service_agents,
     handle_customer_request,
     list_customer_service_agent_cards,
 )
+
+
+class RecordingRouterLLM(ReceptionRouterLLM):
+    def __init__(self):
+        self.calls = []
+
+    def invoke(self, messages, **kwargs):
+        self.calls.append(messages)
+        return super().invoke(messages, **kwargs)
 
 
 def test_customer_service_exposes_multiple_agent_cards():
@@ -53,3 +63,17 @@ def test_customer_service_trace_records_a2a_handoff():
         "a2a.delegate",
         "a2a.response",
     ]
+
+
+def test_receptionist_routing_is_done_by_simple_agent_llm():
+    llm = RecordingRouterLLM()
+
+    result = handle_customer_request("你们有没有试用套餐？", llm=llm)
+
+    assert result["route"] == "sales"
+    assert len(llm.calls) == 1
+    messages = llm.calls[0]
+    assert messages[0]["role"] == "system"
+    assert "你是客服接待员" in messages[0]["content"]
+    assert messages[-1]["role"] == "user"
+    assert "试用套餐" in messages[-1]["content"]
