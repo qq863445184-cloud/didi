@@ -18,6 +18,11 @@ _OPERATORS = {
 
 
 def create_simple_a2a_agent() -> A2AServer:
+    """Backward-compatible entrypoint for the first simple Chapter 10 demo."""
+    return create_calculator_a2a_agent()
+
+
+def create_calculator_a2a_agent() -> A2AServer:
     """Create a small A2A-style agent that exposes skills to other agents."""
     server = A2AServer(
         name="chapter10-calculator-agent",
@@ -54,6 +59,64 @@ def create_simple_a2a_agent() -> A2AServer:
     return server
 
 
+def create_writer_a2a_agent() -> A2AServer:
+    """Create a second A2A-style agent so the demo shows agent-to-agent routing."""
+    server = A2AServer(
+        name="chapter10-writer-agent",
+        description="A simple A2A agent that can summarize or polish short text.",
+        version="0.1.0",
+        capabilities={
+            "protocol": "A2A",
+            "mode": "simulated" if not A2A_AVAILABLE else "sdk",
+            "skills": {
+                "summarize": "Summarize a short text for another agent.",
+                "polish": "Polish a short Chinese sentence.",
+            },
+        },
+    )
+
+    @server.skill("summarize")
+    def summarize(text: str) -> str:
+        compact = " ".join(text.split())
+        if len(compact) <= 48:
+            return f"摘要：{compact}"
+        return f"摘要：{compact[:48]}..."
+
+    @server.skill("polish")
+    def polish(text: str) -> str:
+        compact = " ".join(text.split())
+        return f"润色稿：{compact}。整体表达更清晰，适合放入第十章示例。"
+
+    return server
+
+
+def create_a2a_agent_network() -> dict[str, A2AServer]:
+    """Create a tiny local A2A network with multiple independent agents."""
+    agents = {
+        "calculator": create_calculator_a2a_agent(),
+        "writer": create_writer_a2a_agent(),
+    }
+    return agents
+
+
+def route_a2a_task(agents: dict[str, A2AServer], text: str) -> dict[str, Any]:
+    """Route a task to the best A2A agent based on exposed capabilities.
+
+    A production A2A client would discover remote Agent Cards and call skills
+    over HTTP. The local demo keeps the same idea but avoids opening ports.
+    """
+    target_name, skill_name = _select_agent_and_skill(text)
+    target_agent = agents[target_name]
+    response = call_a2a_skill(target_agent, skill_name, text)
+    return {
+        "status": response["status"],
+        "task": text,
+        "target_agent": target_agent.name,
+        "skill": skill_name,
+        "response": response,
+    }
+
+
 def call_a2a_skill(server: A2AServer, skill_name: str, text: str) -> dict[str, Any]:
     """Call a registered A2A skill directly for tests and local demos.
 
@@ -78,10 +141,25 @@ def call_a2a_skill(server: A2AServer, skill_name: str, text: str) -> dict[str, A
         return {"status": "error", "skill": skill_name, "error": str(exc)}
 
 
+def _select_agent_and_skill(text: str) -> tuple[str, str]:
+    lowered = text.lower()
+    if "总结" in text or "摘要" in text or "summarize" in lowered:
+        return "writer", "summarize"
+    if "润色" in text or "polish" in lowered:
+        return "writer", "polish"
+    if _extract_expression(text) or "计算" in text or "calculate" in lowered:
+        return "calculator", "calculate"
+    return "writer", "summarize"
+
+
 def _extract_expression(text: str) -> str:
     """Extract the longest arithmetic-looking segment from natural language."""
     candidates = re.findall(r"[0-9+\-*/().\s^]+", text)
-    candidates = [item.strip().replace("^", "**") for item in candidates if re.search(r"\d", item)]
+    candidates = [
+        item.strip().replace("^", "**")
+        for item in candidates
+        if re.search(r"\d", item) and re.search(r"[+\-*/^]", item)
+    ]
     return max(candidates, key=len, default="")
 
 
