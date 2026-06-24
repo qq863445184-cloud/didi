@@ -116,17 +116,26 @@ def _create_reception_agent(llm: Any) -> A2AServer:
         llm=llm,
         system_prompt=(
             "你是客服接待员，负责：\n"
-            "1. 分析客户问题类型：technical、sales 或 human_review。\n"
-            "2. 只返回一个分类标签，不要输出解释。\n"
-            "3. 技术问题包括登录、报错、接口、崩溃、无法使用。\n"
-            "4. 销售问题包括价格、套餐、购买、试用、发票。\n"
-            "5. 模糊、敏感或需要人工介入的问题返回 human_review。"
+            "1. 分析客户问题类型，并且必须只返回一个英文标签。\n"
+            "2. 如果是登录失败、报错、接口、崩溃、无法使用、token、API、错误码，返回 technical。\n"
+            "3. 如果是价格、套餐、购买、试用、发票、合同、商务合作，返回 sales。\n"
+            "4. 如果问题模糊、涉及投诉、退款争议、隐私、安全合规或明确要求人工，返回 human_review。\n"
+            "5. 输出只能是 technical、sales、human_review 三者之一，不要解释，不要加标点。\n"
+            "示例：\n"
+            "用户：登录一直报错 token 无效\n"
+            "你：technical\n"
+            "用户：有没有试用套餐\n"
+            "你：sales\n"
+            "用户：我要找人工投诉\n"
+            "你：human_review"
         ),
     )
 
     @server.skill("classify")
     def classify(text: str) -> str:
-        return _normalize_route(receptionist.run(text))
+        raw_route = receptionist.run(text)
+        server.last_raw_route = raw_route
+        return _normalize_route(raw_route)
 
     return server
 
