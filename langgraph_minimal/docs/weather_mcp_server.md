@@ -12,15 +12,41 @@ APIs by default, so no API key is required.
 
 ## Run Locally
 
+From the project root:
+
+```bash
+python app/weather_mcp_server.py
+```
+
+Windows virtualenv example:
+
 ```powershell
-cd D:\360Downloads\Software\didi\langgraph_minimal
 .\.venv\Scripts\python.exe app\weather_mcp_server.py
+```
+
+## MCP Client Config
+
+Use a relative command from the project root when registering this server with
+an MCP client or publishing platform:
+
+```json
+{
+  "command": "python",
+  "args": ["app/weather_mcp_server.py"]
+}
 ```
 
 ## Demo
 
+From the project root:
+
+```bash
+python scripts/chapter10_weather_mcp_demo.py
+```
+
+Windows virtualenv example:
+
 ```powershell
-cd D:\360Downloads\Software\didi\langgraph_minimal
 .\.venv\Scripts\python.exe scripts\chapter10_weather_mcp_demo.py
 ```
 
